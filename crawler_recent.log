@@ -1,0 +1,48 @@
+[Fx] PROVIDE	fx.Lifecycle <= go.uber.org/fx.New.func1()
+[Fx] PROVIDE	fx.Shutdowner <= go.uber.org/fx.(*App).shutdowner-fm()
+[Fx] PROVIDE	fx.DotGraph <= go.uber.org/fx.(*App).dotGraph-fm()
+[Fx] PROVIDE	*config.Config <= ethereum-raw-data-crawler/internal/infrastructure/config.LoadConfig()
+[Fx] PROVIDE	*config.MongoDBConfig <= main.provideMongoDBConfig()
+[Fx] PROVIDE	*config.EthereumConfig <= main.provideEthereumConfig()
+[Fx] PROVIDE	*logger.Logger <= ethereum-raw-data-crawler/internal/infrastructure/logger.NewLogger()
+[Fx] PROVIDE	*database.MongoDB <= ethereum-raw-data-crawler/internal/infrastructure/database.NewMongoDB()
+[Fx] PROVIDE	service.BlockchainService <= fx.Annotate(ethereum-raw-data-crawler/internal/infrastructure/blockchain.NewEthereumService(), fx.As([[service.BlockchainService]])
+[Fx] PROVIDE	repository.BlockRepository <= fx.Annotate(ethereum-raw-data-crawler/internal/adapters/secondary.NewBlockRepository(), fx.As([[repository.BlockRepository]])
+[Fx] PROVIDE	repository.TransactionRepository <= fx.Annotate(ethereum-raw-data-crawler/internal/adapters/secondary.NewTransactionRepository(), fx.As([[repository.TransactionRepository]])
+[Fx] PROVIDE	repository.MetricsRepository <= fx.Annotate(ethereum-raw-data-crawler/internal/adapters/secondary.NewMetricsRepository(), fx.As([[repository.MetricsRepository]])
+[Fx] PROVIDE	*service.CrawlerService <= ethereum-raw-data-crawler/internal/application/service.NewCrawlerService()
+[Fx] INVOKE		main.registerHooks()
+[Fx] BEFORE RUN	provide: go.uber.org/fx.New.func1()
+[Fx] RUN	provide: go.uber.org/fx.New.func1() in 3.208µs
+[Fx] BEFORE RUN	provide: ethereum-raw-data-crawler/internal/infrastructure/config.LoadConfig()
+[Fx] RUN	provide: ethereum-raw-data-crawler/internal/infrastructure/config.LoadConfig() in 227.458µs
+[Fx] BEFORE RUN	provide: ethereum-raw-data-crawler/internal/infrastructure/logger.NewLogger()
+[Fx] RUN	provide: ethereum-raw-data-crawler/internal/infrastructure/logger.NewLogger() in 18.292µs
+[Fx] BEFORE RUN	provide: main.provideMongoDBConfig()
+[Fx] RUN	provide: main.provideMongoDBConfig() in 14µs
+[Fx] BEFORE RUN	provide: ethereum-raw-data-crawler/internal/infrastructure/database.NewMongoDB()
+[Fx] RUN	provide: ethereum-raw-data-crawler/internal/infrastructure/database.NewMongoDB() in 992.463584ms
+[Fx] BEFORE RUN	provide: main.provideEthereumConfig()
+[Fx] RUN	provide: main.provideEthereumConfig() in 21µs
+[Fx] BEFORE RUN	provide: fx.Annotate(ethereum-raw-data-crawler/internal/infrastructure/blockchain.NewEthereumService(), fx.As([[service.BlockchainService]])
+[Fx] RUN	provide: fx.Annotate(ethereum-raw-data-crawler/internal/infrastructure/blockchain.NewEthereumService(), fx.As([[service.BlockchainService]]) in 64.209µs
+[Fx] BEFORE RUN	provide: fx.Annotate(ethereum-raw-data-crawler/internal/adapters/secondary.NewBlockRepository(), fx.As([[repository.BlockRepository]])
+[Fx] RUN	provide: fx.Annotate(ethereum-raw-data-crawler/internal/adapters/secondary.NewBlockRepository(), fx.As([[repository.BlockRepository]]) in 18.125µs
+[Fx] BEFORE RUN	provide: fx.Annotate(ethereum-raw-data-crawler/internal/adapters/secondary.NewTransactionRepository(), fx.As([[repository.TransactionRepository]])
+[Fx] RUN	provide: fx.Annotate(ethereum-raw-data-crawler/internal/adapters/secondary.NewTransactionRepository(), fx.As([[repository.TransactionRepository]]) in 18.208µs
+[Fx] BEFORE RUN	provide: fx.Annotate(ethereum-raw-data-crawler/internal/adapters/secondary.NewMetricsRepository(), fx.As([[repository.MetricsRepository]])
+[Fx] RUN	provide: fx.Annotate(ethereum-raw-data-crawler/internal/adapters/secondary.NewMetricsRepository(), fx.As([[repository.MetricsRepository]]) in 11.166µs
+[Fx] BEFORE RUN	provide: ethereum-raw-data-crawler/internal/application/service.NewCrawlerService()
+[Fx] RUN	provide: ethereum-raw-data-crawler/internal/application/service.NewCrawlerService() in 33.75µs
+[Fx] HOOK OnStart		main.registerHooks.func1() executing (caller: main.registerHooks)
+2025-06-22T17:57:23.687+0700	INFO	crawler/main.go:90	Starting Ethereum Raw Data Crawler	{"version": "1.0.0", "network": "ethereum"}
+2025-06-22T17:57:24.003+0700	INFO	service/crawler_service.go:85	Starting crawler service	{"component": "crawler-service"}
+2025-06-22T17:57:24.003+0700	INFO	blockchain/ethereum_service.go:42	Connecting to Ethereum node	{"component": "ethereum-service", "rpc_url": "https://mainnet.infura.io/v3/fc066db3e5254dd88e0890320478bc75"}
+2025-06-22T17:57:25.037+0700	INFO	blockchain/ethereum_service.go:60	Successfully connected to Ethereum node	{"component": "ethereum-service"}
+2025-06-22T17:57:25.109+0700	INFO	service/crawler_service.go:196	Starting from configured start block	{"component": "crawler-service", "start_block": "22759500"}
+2025-06-22T17:57:25.109+0700	INFO	service/crawler_service.go:103	Crawler service started successfully	{"component": "crawler-service", "current_block": "22759500"}
+2025-06-22T17:57:25.109+0700	INFO	crawler/main.go:118	Ethereum Raw Data Crawler started successfully
+[Fx] HOOK OnStart		main.registerHooks.func1() called by main.registerHooks ran successfully in 1.421761958s
+[Fx] RUNNING
+2025-06-22T17:57:26.373+0700	INFO	service/crawler_service.go:251	Processing block range	{"component": "crawler-service", "start": "22759500", "end": "22759501", "latest": "22759531"}
+2025-06-22T17:57:26.374+0700	INFO	service/crawler_service.go:272	Pausing between batches to avoid rate limiting	{"component": "crawler-service", "delay": "2s"}

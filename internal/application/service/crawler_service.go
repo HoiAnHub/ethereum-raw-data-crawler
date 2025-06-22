@@ -1,0 +1,540 @@
+package service
+
+import (
+	"context"
+	"ethereum-raw-data-crawler/internal/domain/entity"
+	"ethereum-raw-data-crawler/internal/domain/repository"
+	"ethereum-raw-data-crawler/internal/domain/service"
+	"ethereum-raw-data-crawler/internal/infrastructure/config"
+	"ethereum-raw-data-crawler/internal/infrastructure/logger"
+	"fmt"
+	"math/big"
+	"runtime"
+	"strings"
+	"sync"
+	"time"
+
+	"go.uber.org/zap"
+)
+
+// CrawlerService handles the main crawling logic
+type CrawlerService struct {
+	blockchainService service.BlockchainService
+	blockRepo         repository.BlockRepository
+	txRepo            repository.TransactionRepository
+	metricsRepo       repository.MetricsRepository
+	config            *config.Config
+	logger            *logger.Logger
+
+	// State management
+	isRunning    bool
+	currentBlock *big.Int
+	workerPool   chan struct{}
+	stopChan     chan struct{}
+	wg           sync.WaitGroup
+	mu           sync.RWMutex
+
+	// Metrics
+	metrics *CrawlerMetrics
+}
+
+// CrawlerMetrics holds runtime metrics
+type CrawlerMetrics struct {
+	BlocksProcessed       uint64
+	TransactionsProcessed uint64
+	ErrorCount            uint64
+	LastErrorMessage      string
+	StartTime             time.Time
+	LastProcessedBlock    uint64
+	mu                    sync.RWMutex
+}
+
+// NewCrawlerService creates new crawler service
+func NewCrawlerService(
+	blockchainService service.BlockchainService,
+	blockRepo repository.BlockRepository,
+	txRepo repository.TransactionRepository,
+	metricsRepo repository.MetricsRepository,
+	config *config.Config,
+	logger *logger.Logger,
+) *CrawlerService {
+	return &CrawlerService{
+		blockchainService: blockchainService,
+		blockRepo:         blockRepo,
+		txRepo:            txRepo,
+		metricsRepo:       metricsRepo,
+		config:            config,
+		logger:            logger.WithComponent("crawler-service"),
+		workerPool:        make(chan struct{}, config.Crawler.ConcurrentWorkers),
+		stopChan:          make(chan struct{}),
+		metrics: &CrawlerMetrics{
+			StartTime: time.Now(),
+		},
+	}
+}
+
+// Start starts the crawler
+func (s *CrawlerService) Start(ctx context.Context) error {
+	s.mu.Lock()
+	if s.isRunning {
+		s.mu.Unlock()
+		return fmt.Errorf("crawler is already running")
+	}
+	s.isRunning = true
+	s.mu.Unlock()
+
+	s.logger.Info("Starting crawler service")
+
+	// Connect to blockchain
+	if err := s.blockchainService.Connect(ctx); err != nil {
+		return fmt.Errorf("failed to connect to blockchain: %w", err)
+	}
+
+	// Initialize starting block
+	if err := s.initializeStartingBlock(ctx); err != nil {
+		return fmt.Errorf("failed to initialize starting block: %w", err)
+	}
+
+	// Start worker routines
+	s.wg.Add(3)
+	go s.crawlerWorker(ctx)
+	go s.metricsWorker(ctx)
+	go s.healthCheckWorker(ctx)
+
+	s.logger.Info("Crawler service started successfully",
+		zap.String("current_block", s.currentBlock.String()))
+
+	return nil
+}
+
+// Stop stops the crawler
+func (s *CrawlerService) Stop(ctx context.Context) error {
+	s.mu.Lock()
+	if !s.isRunning {
+		s.mu.Unlock()
+		return nil
+	}
+	s.isRunning = false
+	s.mu.Unlock()
+
+	s.logger.Info("Stopping crawler service")
+
+	// Signal stop to all workers
+	close(s.stopChan)
+
+	// Wait for workers to finish
+	done := make(chan struct{})
+	go func() {
+		s.wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		s.logger.Info("All workers stopped gracefully")
+	case <-time.After(30 * time.Second):
+		s.logger.Warn("Timeout waiting for workers to stop")
+	}
+
+	// Disconnect from blockchain
+	if err := s.blockchainService.Disconnect(); err != nil {
+		s.logger.Error("Error disconnecting from blockchain", zap.Error(err))
+	}
+
+	s.logger.Info("Crawler service stopped")
+	return nil
+}
+
+// IsRunning returns if crawler is running
+func (s *CrawlerService) IsRunning() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.isRunning
+}
+
+// GetCurrentBlock returns current block being processed
+func (s *CrawlerService) GetCurrentBlock() *big.Int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.currentBlock == nil {
+		return big.NewInt(0)
+	}
+	return new(big.Int).Set(s.currentBlock)
+}
+
+// GetMetrics returns current crawler metrics
+func (s *CrawlerService) GetMetrics() *CrawlerMetrics {
+	s.metrics.mu.RLock()
+	defer s.metrics.mu.RUnlock()
+
+	return &CrawlerMetrics{
+		BlocksProcessed:       s.metrics.BlocksProcessed,
+		TransactionsProcessed: s.metrics.TransactionsProcessed,
+		ErrorCount:            s.metrics.ErrorCount,
+		LastErrorMessage:      s.metrics.LastErrorMessage,
+		StartTime:             s.metrics.StartTime,
+		LastProcessedBlock:    s.metrics.LastProcessedBlock,
+	}
+}
+
+// initializeStartingBlock initializes the starting block number
+func (s *CrawlerService) initializeStartingBlock(ctx context.Context) error {
+	// Check if we have any processed blocks in database
+	lastBlock, err := s.blockRepo.GetLastProcessedBlock(ctx, s.config.Ethereum.Network)
+	if err != nil {
+		return err
+	}
+
+	if lastBlock != nil {
+		// Resume from next block after last processed
+		lastBlockNum, ok := new(big.Int).SetString(lastBlock.Number, 10)
+		if !ok {
+			s.logger.Error("Failed to parse last block number", zap.String("number", lastBlock.Number))
+			s.currentBlock = big.NewInt(int64(s.config.Ethereum.StartBlock))
+		} else {
+			s.currentBlock = new(big.Int).Add(lastBlockNum, big.NewInt(1))
+		}
+		s.logger.Info("Resuming from last processed block",
+			zap.String("last_block", lastBlock.Number),
+			zap.String("current_block", s.currentBlock.String()))
+	} else {
+		// Start from configured start block
+		s.currentBlock = big.NewInt(int64(s.config.Ethereum.StartBlock))
+		s.logger.Info("Starting from configured start block",
+			zap.String("start_block", s.currentBlock.String()))
+	}
+
+	return nil
+}
+
+// crawlerWorker is the main crawler worker routine
+func (s *CrawlerService) crawlerWorker(ctx context.Context) {
+	defer s.wg.Done()
+
+	ticker := time.NewTicker(1 * time.Second) // Process every second
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-s.stopChan:
+			return
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := s.processNextBlocks(ctx); err != nil {
+				s.updateErrorMetrics(err)
+				s.logger.Error("Error processing blocks", zap.Error(err))
+			}
+		}
+	}
+}
+
+// processNextBlocks processes the next batch of blocks
+func (s *CrawlerService) processNextBlocks(ctx context.Context) error {
+	// Get latest block from blockchain
+	latestBlock, err := s.blockchainService.GetLatestBlockNumber(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get latest block: %w", err)
+	}
+
+	s.logger.Debug("Checking blocks for processing",
+		zap.String("current_block", s.currentBlock.String()),
+		zap.String("latest_block", latestBlock.String()))
+
+	// Check if we're caught up
+	if s.currentBlock.Cmp(latestBlock) > 0 {
+		// We're ahead of the latest block, wait
+		s.logger.Debug("Caught up with latest block, waiting")
+		return nil
+	}
+
+	// Calculate batch end block
+	batchSize := big.NewInt(int64(s.config.Crawler.BatchSize))
+	endBlock := new(big.Int).Add(s.currentBlock, batchSize)
+	if endBlock.Cmp(latestBlock) > 0 {
+		endBlock.Set(latestBlock)
+	}
+
+	s.logger.Info("Processing block range",
+		zap.String("start", s.currentBlock.String()),
+		zap.String("end", endBlock.String()),
+		zap.String("latest", latestBlock.String()))
+
+	// Process blocks in parallel
+	return s.processBlockRange(ctx, s.currentBlock, endBlock)
+}
+
+// processBlockRange processes a range of blocks
+func (s *CrawlerService) processBlockRange(ctx context.Context, startBlock, endBlock *big.Int) error {
+	var wg sync.WaitGroup
+	errChan := make(chan error, s.config.Crawler.ConcurrentWorkers)
+
+	// Add delay between batches to prevent overwhelming API
+	batchDelay := 2 * time.Second
+	blockCount := 0
+
+	for i := new(big.Int).Set(startBlock); i.Cmp(endBlock) <= 0; i.Add(i, big.NewInt(1)) {
+		// Add delay every batch to prevent rate limiting (but not on the first batch)
+		if blockCount > 0 && blockCount%s.config.Crawler.BatchSize == 0 {
+			s.logger.Info("Pausing between batches to avoid rate limiting",
+				zap.Duration("delay", batchDelay),
+				zap.Int("blocks_processed", blockCount))
+			time.Sleep(batchDelay)
+		}
+
+		// Acquire worker slot
+		s.workerPool <- struct{}{}
+		wg.Add(1)
+
+		go func(blockNum *big.Int) {
+			defer func() {
+				wg.Done()
+				<-s.workerPool // Release worker slot
+			}()
+
+			if err := s.processBlock(ctx, new(big.Int).Set(blockNum)); err != nil {
+				errChan <- err
+			}
+		}(new(big.Int).Set(i))
+
+		blockCount++
+	}
+
+	// Wait for all workers to complete
+	wg.Wait()
+	close(errChan)
+
+	// Check for errors
+	var errors []error
+	for err := range errChan {
+		errors = append(errors, err)
+	}
+
+	if len(errors) > 0 {
+		return fmt.Errorf("errors processing block range: %v", errors)
+	}
+
+	// Update current block
+	s.mu.Lock()
+	s.currentBlock.Add(endBlock, big.NewInt(1))
+	s.mu.Unlock()
+
+	return nil
+}
+
+// processBlock processes a single block
+func (s *CrawlerService) processBlock(ctx context.Context, blockNumber *big.Int) error {
+	logger := s.logger.WithBlock(blockNumber.Uint64())
+	logger.Info("Starting to process block", zap.Uint64("block_number", blockNumber.Uint64()))
+
+	// Create timeout context for the entire block processing
+	blockCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+
+	// Get block from blockchain
+	block, err := s.blockchainService.GetBlockByNumber(blockCtx, blockNumber)
+	if err != nil {
+		logger.Error("Failed to get block", zap.Error(err))
+		return fmt.Errorf("failed to get block %s: %w", blockNumber.String(), err)
+	}
+
+	// Check if block already exists by number
+	existingBlock, err := s.blockRepo.GetBlockByNumber(blockCtx, blockNumber)
+	if err != nil {
+		logger.Error("Failed to check if block exists", zap.Error(err))
+		return fmt.Errorf("failed to check block existence %s: %w", blockNumber.String(), err)
+	}
+
+	if existingBlock != nil {
+		logger.Info("Block already exists, skipping block save",
+			zap.String("block_hash", block.Hash),
+			zap.String("existing_hash", existingBlock.Hash))
+	} else {
+		// Save block to database
+		if err := s.blockRepo.CreateBlock(blockCtx, block); err != nil {
+			// Check if it's a duplicate key error (race condition)
+			if strings.Contains(err.Error(), "E11000") || strings.Contains(err.Error(), "duplicate key") {
+				logger.Warn("Block already exists (race condition), continuing",
+					zap.String("block_hash", block.Hash))
+			} else {
+				logger.Error("Failed to save block", zap.Error(err))
+				return fmt.Errorf("failed to save block %s: %w", blockNumber.String(), err)
+			}
+		} else {
+			logger.Info("Block saved to database")
+		}
+	}
+
+	// Get all transactions for this block
+	logger.Info("Getting transactions for block", zap.Int("tx_hash_count", len(block.TransactionHashes)))
+	transactions, err := s.blockchainService.GetTransactionsByBlock(blockCtx, blockNumber)
+	if err != nil {
+		logger.Error("Failed to get transactions", zap.Error(err))
+		return fmt.Errorf("failed to get transactions for block %s: %w", blockNumber.String(), err)
+	}
+	logger.Info("Retrieved transactions", zap.Int("count", len(transactions)))
+
+	// Save transactions to database
+	if len(transactions) > 0 {
+		if err := s.txRepo.CreateTransactions(blockCtx, transactions); err != nil {
+			logger.Error("Failed to save transactions", zap.Error(err))
+			return fmt.Errorf("failed to save transactions for block %s: %w", blockNumber.String(), err)
+		}
+		logger.Info("Transactions saved to database")
+	}
+
+	// Mark block as processed
+	if err := s.blockRepo.MarkBlockAsProcessed(ctx, block.Hash); err != nil {
+		logger.Error("Failed to mark block as processed", zap.Error(err))
+	}
+
+	// Update metrics
+	s.updateProcessingMetrics(block, transactions)
+
+	logger.Info("Block processed successfully",
+		zap.Int("transaction_count", len(transactions)))
+
+	return nil
+}
+
+// metricsWorker periodically saves metrics to database
+func (s *CrawlerService) metricsWorker(ctx context.Context) {
+	defer s.wg.Done()
+
+	ticker := time.NewTicker(30 * time.Second) // Save metrics every 30 seconds
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-s.stopChan:
+			return
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := s.saveMetrics(ctx); err != nil {
+				s.logger.Error("Failed to save metrics", zap.Error(err))
+			}
+		}
+	}
+}
+
+// healthCheckWorker periodically performs health checks
+func (s *CrawlerService) healthCheckWorker(ctx context.Context) {
+	defer s.wg.Done()
+
+	ticker := time.NewTicker(s.config.Monitoring.HealthCheckInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-s.stopChan:
+			return
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := s.performHealthCheck(ctx); err != nil {
+				s.logger.Error("Health check failed", zap.Error(err))
+			}
+		}
+	}
+}
+
+// saveMetrics saves current metrics to database
+func (s *CrawlerService) saveMetrics(ctx context.Context) error {
+	metrics := s.GetMetrics()
+
+	// Get current block from blockchain
+	latestBlock, err := s.blockchainService.GetLatestBlockNumber(ctx)
+	if err != nil {
+		latestBlock = big.NewInt(0)
+	}
+
+	// Calculate processing rate
+	elapsed := time.Since(metrics.StartTime)
+	var blocksPerSecond, transactionsPerSecond float64
+	if elapsed.Seconds() > 0 {
+		blocksPerSecond = float64(metrics.BlocksProcessed) / elapsed.Seconds()
+		transactionsPerSecond = float64(metrics.TransactionsProcessed) / elapsed.Seconds()
+	}
+
+	// Get memory stats
+	var memStats runtime.MemStats
+	runtime.ReadMemStats(&memStats)
+
+	metricsEntity := &entity.CrawlerMetrics{
+		Timestamp:             time.Now(),
+		LastProcessedBlock:    metrics.LastProcessedBlock,
+		CurrentBlock:          latestBlock.Uint64(),
+		BlocksProcessed:       metrics.BlocksProcessed,
+		BlocksPerSecond:       blocksPerSecond,
+		TransactionsProcessed: metrics.TransactionsProcessed,
+		TransactionsPerSecond: transactionsPerSecond,
+		ErrorCount:            metrics.ErrorCount,
+		LastErrorMessage:      metrics.LastErrorMessage,
+		MemoryUsage:           memStats.Alloc,
+		GoroutineCount:        runtime.NumGoroutine(),
+		Network:               s.config.Ethereum.Network,
+	}
+
+	return s.metricsRepo.SaveCrawlerMetrics(ctx, metricsEntity)
+}
+
+// performHealthCheck performs system health check
+func (s *CrawlerService) performHealthCheck(ctx context.Context) error {
+	start := time.Now()
+
+	// Check blockchain connection
+	err := s.blockchainService.HealthCheck(ctx)
+	networkLatency := time.Since(start)
+
+	status := entity.HealthStatusHealthy
+	message := "All systems operational"
+
+	if err != nil {
+		status = entity.HealthStatusUnhealthy
+		message = fmt.Sprintf("Blockchain connection failed: %v", err)
+	} else if networkLatency > 5*time.Second {
+		status = entity.HealthStatusDegraded
+		message = "High network latency detected"
+	}
+
+	health := &entity.SystemHealth{
+		Timestamp: time.Now(),
+		Status:    status,
+		Message:   message,
+		Network:   s.config.Ethereum.Network,
+		ComponentsHealth: map[string]entity.ComponentHealth{
+			"blockchain": {
+				Status:       status,
+				LastChecked:  time.Now(),
+				Message:      message,
+				ResponseTime: networkLatency,
+			},
+		},
+	}
+
+	return s.metricsRepo.SaveSystemHealth(ctx, health)
+}
+
+// updateProcessingMetrics updates processing metrics
+func (s *CrawlerService) updateProcessingMetrics(block *entity.Block, transactions []*entity.Transaction) {
+	s.metrics.mu.Lock()
+	defer s.metrics.mu.Unlock()
+
+	s.metrics.BlocksProcessed++
+	s.metrics.TransactionsProcessed += uint64(len(transactions))
+
+	// Convert block number string to uint64
+	if blockNum, ok := new(big.Int).SetString(block.Number, 10); ok {
+		s.metrics.LastProcessedBlock = blockNum.Uint64()
+	}
+}
+
+// updateErrorMetrics updates error metrics
+func (s *CrawlerService) updateErrorMetrics(err error) {
+	s.metrics.mu.Lock()
+	defer s.metrics.mu.Unlock()
+
+	s.metrics.ErrorCount++
+	s.metrics.LastErrorMessage = err.Error()
+}

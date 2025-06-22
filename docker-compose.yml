@@ -1,0 +1,118 @@
+version: '3.8'
+
+services:
+  # MongoDB database
+  mongodb:
+    image: mongo:7.0
+    container_name: ethereum-crawler-mongodb
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: password
+      MONGO_INITDB_DATABASE: ethereum_raw_data
+    volumes:
+      - mongodb_data:/data/db
+      - ./scripts/init-mongo.js:/docker-entrypoint-initdb.d/init-mongo.js:ro
+    networks:
+      - crawler-network
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/ethereum_raw_data --quiet
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Ethereum crawler application
+  ethereum-crawler:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ethereum-crawler-app
+    restart: unless-stopped
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    environment:
+      # MongoDB Configuration
+      MONGO_URI: mongodb://admin:password@mongodb:27017/ethereum_raw_data?authSource=admin
+      MONGO_DATABASE: ethereum_raw_data
+
+      # Ethereum Configuration
+      ETHEREUM_RPC_URL: ${ETHEREUM_RPC_URL:-https://mainnet.infura.io/v3/YOUR_PROJECT_ID}
+      ETHEREUM_WS_URL: ${ETHEREUM_WS_URL:-wss://mainnet.infura.io/v3/YOUR_PROJECT_ID}
+      START_BLOCK_NUMBER: ${START_BLOCK_NUMBER:-19000000}
+
+      # Application Configuration
+      APP_ENV: development
+      LOG_LEVEL: info
+
+      # Crawler Configuration
+      BATCH_SIZE: ${BATCH_SIZE:-10}
+      CONCURRENT_WORKERS: ${CONCURRENT_WORKERS:-5}
+      RETRY_ATTEMPTS: 3
+      RETRY_DELAY: 5s
+
+      # Monitoring Configuration
+      METRICS_ENABLED: true
+      HEALTH_CHECK_INTERVAL: 30s
+    volumes:
+      - ./logs:/home/crawler/logs
+    networks:
+      - crawler-network
+    healthcheck:
+      test: pgrep crawler || exit 1
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # MongoDB Express (Web UI for MongoDB)
+  mongo-express:
+    image: mongo-express:latest
+    container_name: ethereum-crawler-mongo-express
+    restart: unless-stopped
+    ports:
+      - "8081:8081"
+    environment:
+      ME_CONFIG_MONGODB_ADMINUSERNAME: admin
+      ME_CONFIG_MONGODB_ADMINPASSWORD: password
+      ME_CONFIG_MONGODB_URL: mongodb://admin:password@mongodb:27017/
+      ME_CONFIG_BASICAUTH_USERNAME: admin
+      ME_CONFIG_BASICAUTH_PASSWORD: password
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    networks:
+      - crawler-network
+
+  # Prometheus for metrics collection (optional)
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: ethereum-crawler-prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
+    networks:
+      - crawler-network
+
+volumes:
+  mongodb_data:
+    driver: local
+  prometheus_data:
+    driver: local
+
+networks:
+  crawler-network:
+    driver: bridge
