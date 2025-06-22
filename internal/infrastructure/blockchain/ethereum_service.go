@@ -478,6 +478,23 @@ func (s *EthereumService) convertTransaction(tx *types.Transaction, receipt *typ
 		blockNumberStr = blockNumber.String()
 	}
 
+	// Determine transaction status based on context
+	var txStatus entity.TransactionStatus
+	if receipt != nil {
+		// If we have receipt, transaction is processed
+		if receipt.Status == 1 {
+			txStatus = entity.TransactionStatusProcessed
+		} else {
+			txStatus = entity.TransactionStatusFailed
+		}
+	} else if block != nil && blockHash != "" {
+		// If transaction is in a block, it's processed (we just don't have receipt)
+		txStatus = entity.TransactionStatusProcessed
+	} else {
+		// Otherwise it's pending
+		txStatus = entity.TransactionStatusPending
+	}
+
 	return &entity.Transaction{
 		Hash:                 tx.Hash().Hex(),
 		BlockHash:            blockHash,
@@ -498,7 +515,7 @@ func (s *EthereumService) convertTransaction(tx *types.Transaction, receipt *typ
 		ContractAddress:      contractAddress,
 		CrawledAt:            time.Now(),
 		Network:              s.config.Network,
-		TxStatus:             entity.TransactionStatusPending,
+		TxStatus:             txStatus,
 	}
 }
 
