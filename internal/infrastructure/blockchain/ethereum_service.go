@@ -8,6 +8,7 @@ import (
 	"ethereum-raw-data-crawler/internal/domain/service"
 	"ethereum-raw-data-crawler/internal/infrastructure/config"
 	"ethereum-raw-data-crawler/internal/infrastructure/logger"
+	"fmt"
 	"math/big"
 	"strings"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethclient"
+	"github.com/ethereum/go-ethereum/params"
 	"go.uber.org/zap"
 )
 
@@ -166,7 +168,7 @@ func (s *EthereumService) GetTransactionByHash(ctx context.Context, txHash strin
 		return nil, ErrTransactionPending
 	}
 
-	return s.convertTransaction(tx, nil), nil
+	return s.convertTransaction(tx, nil, nil, 0), nil
 }
 
 // GetTransactionReceipt gets transaction receipt
@@ -193,7 +195,7 @@ func (s *EthereumService) GetTransactionReceipt(ctx context.Context, txHash stri
 		return nil, err
 	}
 
-	return s.convertTransaction(tx, receipt), nil
+	return s.convertTransaction(tx, receipt, nil, 0), nil
 }
 
 // GetTransactionsByBlock gets all transactions in a block
@@ -238,7 +240,7 @@ func (s *EthereumService) GetTransactionsByBlock(ctx context.Context, blockNumbe
 			}
 		}
 
-		transactions = append(transactions, s.convertTransaction(tx, receipt))
+		transactions = append(transactions, s.convertTransaction(tx, receipt, block, uint(i)))
 
 		// Log progress for blocks with transactions
 		if len(block.Transactions()) > 10 && (i+1)%10 == 0 {
@@ -254,6 +256,16 @@ func (s *EthereumService) GetTransactionsByBlock(ctx context.Context, blockNumbe
 		zap.Int("successful", len(transactions)))
 
 	return transactions, nil
+}
+
+// sanitizeData converts raw bytes to a safe UTF-8 string for MongoDB storage
+func (s *EthereumService) sanitizeData(data []byte) string {
+	if len(data) == 0 {
+		return ""
+	}
+
+	// Convert to hex string to ensure valid UTF-8
+	return "0x" + hex.EncodeToString(data)
 }
 
 // getTransactionReceiptWithRetry gets transaction receipt with retry logic
@@ -374,7 +386,7 @@ func (s *EthereumService) convertBlock(block *types.Block) *entity.Block {
 		Miner:             block.Coinbase().Hex(),
 		Difficulty:        block.Difficulty().String(),
 		TotalDifficulty:   "0", // Note: This requires separate call
-		ExtraData:         string(block.Extra()),
+		ExtraData:         s.sanitizeData(block.Extra()),
 		Size:              block.Size(),
 		GasLimit:          block.GasLimit(),
 		GasUsed:           block.GasUsed(),
@@ -388,7 +400,7 @@ func (s *EthereumService) convertBlock(block *types.Block) *entity.Block {
 }
 
 // convertTransaction converts go-ethereum Transaction to entity.Transaction
-func (s *EthereumService) convertTransaction(tx *types.Transaction, receipt *types.Receipt) *entity.Transaction {
+func (s *EthereumService) convertTransaction(tx *types.Transaction, receipt *types.Receipt, block *types.Block, txIndex uint) *entity.Transaction {
 	var to *string
 	if tx.To() != nil {
 		toAddr := tx.To().Hex()
@@ -401,7 +413,7 @@ func (s *EthereumService) convertTransaction(tx *types.Transaction, receipt *typ
 	var cumulativeGasUsed uint64
 	var blockHash string
 	var blockNumber *big.Int
-	var transactionIndex uint
+	var transactionIndex uint = txIndex
 
 	if receipt != nil {
 		if receipt.ContractAddress != (common.Address{}) {
@@ -414,32 +426,75 @@ func (s *EthereumService) convertTransaction(tx *types.Transaction, receipt *typ
 		blockHash = receipt.BlockHash.Hex()
 		blockNumber = receipt.BlockNumber
 		transactionIndex = receipt.TransactionIndex
+	} else if block != nil {
+		// Use block context when receipt is not available
+		blockHash = block.Hash().Hex()
+		blockNumber = block.Number()
+		transactionIndex = txIndex
 	}
 
-	// Get from address
-	from, err := types.Sender(types.NewEIP155Signer(tx.ChainId()), tx)
+	// Get from address with multiple approaches
 	var fromAddr string
-	if err == nil {
+
+	// First try: Use latest signer with chain config (should handle most transaction types)
+	if from, err := types.Sender(types.LatestSigner(params.MainnetChainConfig), tx); err == nil {
 		fromAddr = from.Hex()
+	} else {
+		// Fallback: Try different signers to handle various transaction types
+		signers := []types.Signer{
+			types.NewLondonSigner(tx.ChainId()), // For EIP-1559 transactions (type 2)
+			types.NewEIP155Signer(tx.ChainId()), // For EIP-155 transactions (type 0)
+			types.HomesteadSigner{},             // For pre-EIP155 transactions
+			types.FrontierSigner{},              // For frontier transactions
+		}
+
+		for _, signer := range signers {
+			if from, err := types.Sender(signer, tx); err == nil {
+				fromAddr = from.Hex()
+				break
+			}
+		}
+	}
+
+	// Log if we couldn't extract sender (only for non-type-3 transactions)
+	if fromAddr == "" {
+		if tx.Type() == 3 {
+			// EIP-4844 blob transactions - known limitation with current go-ethereum version
+			s.logger.Debug("Cannot extract sender for EIP-4844 blob transaction (known limitation)",
+				zap.String("tx_hash", tx.Hash().Hex()),
+				zap.String("tx_type", "3"))
+		} else {
+			// This is unexpected for other transaction types
+			s.logger.Warn("Failed to extract sender address",
+				zap.String("tx_hash", tx.Hash().Hex()),
+				zap.String("chain_id", tx.ChainId().String()),
+				zap.String("tx_type", fmt.Sprintf("%d", tx.Type())))
+		}
+	}
+
+	// Handle blockNumber conversion safely
+	var blockNumberStr string
+	if blockNumber != nil {
+		blockNumberStr = blockNumber.String()
 	}
 
 	return &entity.Transaction{
 		Hash:                 tx.Hash().Hex(),
 		BlockHash:            blockHash,
-		BlockNumber:          blockNumber,
+		BlockNumber:          blockNumberStr,
 		TransactionIndex:     transactionIndex,
 		From:                 fromAddr,
 		To:                   to,
-		Value:                tx.Value(),
+		Value:                tx.Value().String(),
 		Gas:                  tx.Gas(),
-		GasPrice:             tx.GasPrice(),
+		GasPrice:             tx.GasPrice().String(),
 		GasUsed:              gasUsed,
 		CumulativeGasUsed:    cumulativeGasUsed,
-		Data:                 string(tx.Data()),
+		Data:                 s.sanitizeData(tx.Data()),
 		Nonce:                tx.Nonce(),
 		Status:               status,
-		MaxFeePerGas:         tx.GasFeeCap(),
-		MaxPriorityFeePerGas: tx.GasTipCap(),
+		MaxFeePerGas:         tx.GasFeeCap().String(),
+		MaxPriorityFeePerGas: tx.GasTipCap().String(),
 		ContractAddress:      contractAddress,
 		CrawledAt:            time.Now(),
 		Network:              s.config.Network,

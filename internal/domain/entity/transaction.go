@@ -1,7 +1,6 @@
 package entity
 
 import (
-	"math/big"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -12,13 +11,13 @@ type Transaction struct {
 	ID                primitive.ObjectID `bson:"_id,omitempty" json:"id"`
 	Hash              string             `bson:"hash" json:"hash"`
 	BlockHash         string             `bson:"block_hash" json:"block_hash"`
-	BlockNumber       *big.Int           `bson:"block_number" json:"block_number"`
+	BlockNumber       string             `bson:"block_number" json:"block_number"`
 	TransactionIndex  uint               `bson:"transaction_index" json:"transaction_index"`
 	From              string             `bson:"from" json:"from"`
 	To                *string            `bson:"to" json:"to"` // Can be nil for contract creation
-	Value             *big.Int           `bson:"value" json:"value"`
+	Value             string             `bson:"value" json:"value"`
 	Gas               uint64             `bson:"gas" json:"gas"`
-	GasPrice          *big.Int           `bson:"gas_price" json:"gas_price"`
+	GasPrice          string             `bson:"gas_price" json:"gas_price"`
 	GasUsed           uint64             `bson:"gas_used" json:"gas_used"`
 	CumulativeGasUsed uint64             `bson:"cumulative_gas_used" json:"cumulative_gas_used"`
 	Data              string             `bson:"data" json:"data"`
@@ -26,8 +25,8 @@ type Transaction struct {
 	Status            uint64             `bson:"status" json:"status"` // 1 for success, 0 for failure
 
 	// EIP-1559 fields
-	MaxFeePerGas         *big.Int `bson:"max_fee_per_gas,omitempty" json:"max_fee_per_gas,omitempty"`
-	MaxPriorityFeePerGas *big.Int `bson:"max_priority_fee_per_gas,omitempty" json:"max_priority_fee_per_gas,omitempty"`
+	MaxFeePerGas         string `bson:"max_fee_per_gas,omitempty" json:"max_fee_per_gas,omitempty"`
+	MaxPriorityFeePerGas string `bson:"max_priority_fee_per_gas,omitempty" json:"max_priority_fee_per_gas,omitempty"`
 
 	// Contract creation
 	ContractAddress *string `bson:"contract_address,omitempty" json:"contract_address,omitempty"`

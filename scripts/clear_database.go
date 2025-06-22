@@ -27,9 +27,9 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Clear collections
-	collections := []string{"blocks", "transactions", "crawler_metrics", "system_health"}
-	
+	// Clear collections (focus on blocks and transactions due to schema change)
+	collections := []string{"blocks", "transactions"}
+
 	for _, collName := range collections {
 		coll := db.GetCollection(collName)
 		result, err := coll.DeleteMany(ctx, map[string]interface{}{})

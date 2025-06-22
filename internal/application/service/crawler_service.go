@@ -211,7 +211,7 @@ func (s *CrawlerService) initializeStartingBlock(ctx context.Context) error {
 func (s *CrawlerService) crawlerWorker(ctx context.Context) {
 	defer s.wg.Done()
 
-	ticker := time.NewTicker(1 * time.Second) // Process every second
+	ticker := time.NewTicker(3 * time.Second) // Process every 3 seconds (reduced from 1s)
 	defer ticker.Stop()
 
 	for {
@@ -270,7 +270,7 @@ func (s *CrawlerService) processBlockRange(ctx context.Context, startBlock, endB
 	errChan := make(chan error, s.config.Crawler.ConcurrentWorkers)
 
 	// Add delay between batches to prevent overwhelming API
-	batchDelay := 2 * time.Second
+	batchDelay := 5 * time.Second // Increased from 2s to 5s
 	blockCount := 0
 
 	for i := new(big.Int).Set(startBlock); i.Cmp(endBlock) <= 0; i.Add(i, big.NewInt(1)) {
@@ -280,6 +280,11 @@ func (s *CrawlerService) processBlockRange(ctx context.Context, startBlock, endB
 				zap.Duration("delay", batchDelay),
 				zap.Int("blocks_processed", blockCount))
 			time.Sleep(batchDelay)
+		}
+
+		// Add small delay between blocks to be gentler on API
+		if blockCount > 0 {
+			time.Sleep(500 * time.Millisecond)
 		}
 
 		// Acquire worker slot
