@@ -6,6 +6,7 @@ import (
 	"ethereum-raw-data-crawler/internal/domain/repository"
 	"ethereum-raw-data-crawler/internal/infrastructure/database"
 	"math/big"
+	"strings"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -18,6 +19,57 @@ import (
 type TransactionRepositoryImpl struct {
 	db         *database.MongoDB
 	collection *mongo.Collection
+}
+
+// retryOperation executes an operation with retry logic for MongoDB connection issues
+func (r *TransactionRepositoryImpl) retryOperation(ctx context.Context, operation func() error) error {
+	maxRetries := 3
+	baseDelay := time.Second
+
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		err := operation()
+		if err == nil {
+			return nil
+		}
+
+		// Check if it's a connection-related error
+		if r.isConnectionError(err) && attempt < maxRetries-1 {
+			delay := baseDelay * time.Duration(attempt+1)
+			time.Sleep(delay)
+			continue
+		}
+
+		return err
+	}
+
+	return nil
+}
+
+// isConnectionError checks if the error is related to MongoDB connection issues
+func (r *TransactionRepositoryImpl) isConnectionError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	errStr := strings.ToLower(err.Error())
+	connectionErrors := []string{
+		"connection",
+		"network",
+		"timeout",
+		"server selection",
+		"no reachable servers",
+		"socket",
+		"broken pipe",
+		"connection reset",
+	}
+
+	for _, connErr := range connectionErrors {
+		if strings.Contains(errStr, connErr) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // NewTransactionRepository creates new transaction repository
@@ -35,57 +87,61 @@ func (r *TransactionRepositoryImpl) CreateTransaction(ctx context.Context, tx *e
 	return err
 }
 
-// CreateTransactions creates multiple transactions
+// CreateTransactions creates multiple transactions with retry logic
 func (r *TransactionRepositoryImpl) CreateTransactions(ctx context.Context, txs []*entity.Transaction) error {
 	if len(txs) == 0 {
 		return nil
 	}
 
-	documents := make([]interface{}, len(txs))
-	for i, tx := range txs {
-		tx.ID = primitive.NewObjectID()
-		documents[i] = tx
-	}
+	return r.retryOperation(ctx, func() error {
+		documents := make([]interface{}, len(txs))
+		for i, tx := range txs {
+			tx.ID = primitive.NewObjectID()
+			documents[i] = tx
+		}
 
-	_, err := r.collection.InsertMany(ctx, documents)
-	return err
+		_, err := r.collection.InsertMany(ctx, documents)
+		return err
+	})
 }
 
-// UpsertTransactions upserts multiple transactions using bulk operations
+// UpsertTransactions upserts multiple transactions using bulk operations with retry logic
 func (r *TransactionRepositoryImpl) UpsertTransactions(ctx context.Context, txs []*entity.Transaction) error {
 	if len(txs) == 0 {
 		return nil
 	}
 
-	// Create bulk write operations
-	var operations []mongo.WriteModel
+	return r.retryOperation(ctx, func() error {
+		// Create bulk write operations
+		var operations []mongo.WriteModel
 
-	for _, tx := range txs {
-		// Set ID if not already set
-		if tx.ID.IsZero() {
-			tx.ID = primitive.NewObjectID()
+		for _, tx := range txs {
+			// Set ID if not already set
+			if tx.ID.IsZero() {
+				tx.ID = primitive.NewObjectID()
+			}
+
+			// Create filter based on transaction hash (unique identifier)
+			filter := bson.M{"hash": tx.Hash}
+
+			// Create update document
+			update := bson.M{"$set": tx}
+
+			// Create upsert operation
+			upsertOp := mongo.NewUpdateOneModel()
+			upsertOp.SetFilter(filter)
+			upsertOp.SetUpdate(update)
+			upsertOp.SetUpsert(true)
+
+			operations = append(operations, upsertOp)
 		}
 
-		// Create filter based on transaction hash (unique identifier)
-		filter := bson.M{"hash": tx.Hash}
+		// Execute bulk write
+		opts := options.BulkWrite().SetOrdered(false) // Allow parallel execution
+		_, err := r.collection.BulkWrite(ctx, operations, opts)
 
-		// Create update document
-		update := bson.M{"$set": tx}
-
-		// Create upsert operation
-		upsertOp := mongo.NewUpdateOneModel()
-		upsertOp.SetFilter(filter)
-		upsertOp.SetUpdate(update)
-		upsertOp.SetUpsert(true)
-
-		operations = append(operations, upsertOp)
-	}
-
-	// Execute bulk write
-	opts := options.BulkWrite().SetOrdered(false) // Allow parallel execution
-	_, err := r.collection.BulkWrite(ctx, operations, opts)
-
-	return err
+		return err
+	})
 }
 
 // GetTransactionByHash gets transaction by hash

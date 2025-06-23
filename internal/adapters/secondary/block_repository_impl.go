@@ -20,6 +20,84 @@ type BlockRepositoryImpl struct {
 	collection *mongo.Collection
 }
 
+// retryOperation executes an operation with retry logic for MongoDB connection issues
+func (r *BlockRepositoryImpl) retryOperation(ctx context.Context, operation func() error) error {
+	maxRetries := 3
+	baseDelay := time.Second
+
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		err := operation()
+		if err == nil {
+			return nil
+		}
+
+		// Check if it's a connection-related error
+		if r.isConnectionError(err) && attempt < maxRetries-1 {
+			delay := baseDelay * time.Duration(attempt+1)
+			time.Sleep(delay)
+			continue
+		}
+
+		return err
+	}
+
+	return nil
+}
+
+// isConnectionError checks if the error is related to MongoDB connection issues
+func (r *BlockRepositoryImpl) isConnectionError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	errStr := err.Error()
+	connectionErrors := []string{
+		"connection",
+		"network",
+		"timeout",
+		"server selection",
+		"no reachable servers",
+		"socket",
+		"broken pipe",
+		"connection reset",
+	}
+
+	for _, connErr := range connectionErrors {
+		if len(errStr) > 0 && len(connErr) > 0 {
+			// Simple contains check without strings package
+			if containsSubstring(errStr, connErr) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+// containsSubstring checks if s contains substr (simple implementation)
+func containsSubstring(s, substr string) bool {
+	if len(substr) == 0 {
+		return true
+	}
+	if len(s) < len(substr) {
+		return false
+	}
+
+	for i := 0; i <= len(s)-len(substr); i++ {
+		match := true
+		for j := 0; j < len(substr); j++ {
+			if s[i+j] != substr[j] {
+				match = false
+				break
+			}
+		}
+		if match {
+			return true
+		}
+	}
+	return false
+}
+
 // NewBlockRepository creates new block repository
 func NewBlockRepository(db *database.MongoDB) repository.BlockRepository {
 	return &BlockRepositoryImpl{
@@ -28,11 +106,13 @@ func NewBlockRepository(db *database.MongoDB) repository.BlockRepository {
 	}
 }
 
-// CreateBlock creates a new block
+// CreateBlock creates a new block with retry logic
 func (r *BlockRepositoryImpl) CreateBlock(ctx context.Context, block *entity.Block) error {
-	block.ID = primitive.NewObjectID()
-	_, err := r.collection.InsertOne(ctx, block)
-	return err
+	return r.retryOperation(ctx, func() error {
+		block.ID = primitive.NewObjectID()
+		_, err := r.collection.InsertOne(ctx, block)
+		return err
+	})
 }
 
 // CreateBlocks creates multiple blocks

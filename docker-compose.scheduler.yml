@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # MongoDB database
   mongodb:
@@ -14,17 +12,25 @@ services:
       - "27017:27017"
     command:
       - "--bind_ip_all"
+      - "--maxConns=1000"
+      - "--wiredTigerCacheSizeGB=0.5"
     volumes:
       - mongodb_data:/data/db
       - ./scripts/mongo-init.js:/docker-entrypoint-initdb.d/mongo-init.js:ro
     networks:
       - ethereum-scheduler-network
     healthcheck:
-      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')", "--quiet"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 512M
 
   # Ethereum block scheduler application
   ethereum-scheduler:
@@ -37,10 +43,13 @@ services:
       mongodb:
         condition: service_healthy
     environment:
-      # MongoDB Configuration
+      # MongoDB Configuration with optimized connection settings
       # MONGO_URI: mongodb://admin:password@mongodb:27017/ethereum_raw_data?authSource=admin
-      MONGO_URI: ${MONGO_URI:-mongodb://admin:password@mongodb:27017/ethereum_raw_data?authSource=admin}
+      # MONGO_URI: ${MONGO_URI:-mongodb://admin:password@mongodb:27017/ethereum_raw_data?authSource=admin&maxPoolSize=50&minPoolSize=5&maxIdleTimeMS=30000&serverSelectionTimeoutMS=5000&socketTimeoutMS=30000&connectTimeoutMS=10000&heartbeatFrequencyMS=10000&retryWrites=true&retryReads=true}
+      MONGO_URI: mongodb://admin:password@mongodb:27017/ethereum_raw_data?authSource=admin&maxPoolSize=50&minPoolSize=5&maxIdleTimeMS=30000&serverSelectionTimeoutMS=5000&socketTimeoutMS=30000&connectTimeoutMS=10000&heartbeatFrequencyMS=10000&retryWrites=true&retryReads=true
       MONGO_DATABASE: ethereum_raw_data
+      MONGO_CONNECT_TIMEOUT: 10s
+      MONGO_MAX_POOL_SIZE: 50
 
       # Ethereum Configuration
       ETHEREUM_RPC_URL: ${ETHEREUM_RPC_URL:-https://mainnet.infura.io/v3/YOUR_PROJECT_ID}

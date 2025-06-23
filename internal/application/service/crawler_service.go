@@ -38,6 +38,10 @@ type CrawlerService struct {
 
 	// Metrics
 	metrics *CrawlerMetrics
+
+	// Health check counters
+	consecutiveHealthCheckFailures int
+	lastHealthCheckTime            time.Time
 }
 
 // CrawlerMetrics holds runtime metrics
@@ -628,41 +632,187 @@ func (s *CrawlerService) saveMetrics(ctx context.Context) error {
 	return s.metricsRepo.SaveCrawlerMetrics(ctx, metricsEntity)
 }
 
-// performHealthCheck performs system health check
+// performHealthCheck performs comprehensive system health check
 func (s *CrawlerService) performHealthCheck(ctx context.Context) error {
 	start := time.Now()
+	componentsHealth := make(map[string]entity.ComponentHealth)
+
+	overallStatus := entity.HealthStatusHealthy
+	var messages []string
 
 	// Check blockchain connection
-	err := s.blockchainService.HealthCheck(ctx)
-	networkLatency := time.Since(start)
+	blockchainStart := time.Now()
+	blockchainErr := s.blockchainService.HealthCheck(ctx)
+	blockchainLatency := time.Since(blockchainStart)
 
-	status := entity.HealthStatusHealthy
-	message := "All systems operational"
+	blockchainStatus := entity.HealthStatusHealthy
+	blockchainMessage := "Blockchain connection healthy"
 
-	if err != nil {
-		status = entity.HealthStatusUnhealthy
-		message = fmt.Sprintf("Blockchain connection failed: %v", err)
-	} else if networkLatency > 5*time.Second {
-		status = entity.HealthStatusDegraded
-		message = "High network latency detected"
+	if blockchainErr != nil {
+		blockchainStatus = entity.HealthStatusUnhealthy
+		blockchainMessage = fmt.Sprintf("Blockchain connection failed: %v", blockchainErr)
+		overallStatus = entity.HealthStatusUnhealthy
+		messages = append(messages, blockchainMessage)
+	} else if blockchainLatency > 5*time.Second {
+		blockchainStatus = entity.HealthStatusDegraded
+		blockchainMessage = "High blockchain network latency detected"
+		if overallStatus == entity.HealthStatusHealthy {
+			overallStatus = entity.HealthStatusDegraded
+		}
+		messages = append(messages, blockchainMessage)
+	}
+
+	componentsHealth["blockchain"] = entity.ComponentHealth{
+		Status:       blockchainStatus,
+		LastChecked:  time.Now(),
+		Message:      blockchainMessage,
+		ResponseTime: blockchainLatency,
+	}
+
+	// Check MongoDB connection
+	mongoStart := time.Now()
+	mongoErr := s.checkMongoDBHealth(ctx)
+	mongoLatency := time.Since(mongoStart)
+
+	mongoStatus := entity.HealthStatusHealthy
+	mongoMessage := "MongoDB connection healthy"
+
+	if mongoErr != nil {
+		mongoStatus = entity.HealthStatusUnhealthy
+		mongoMessage = fmt.Sprintf("MongoDB connection failed: %v", mongoErr)
+		overallStatus = entity.HealthStatusUnhealthy
+		messages = append(messages, mongoMessage)
+	} else if mongoLatency > 2*time.Second {
+		mongoStatus = entity.HealthStatusDegraded
+		mongoMessage = "High MongoDB latency detected"
+		if overallStatus == entity.HealthStatusHealthy {
+			overallStatus = entity.HealthStatusDegraded
+		}
+		messages = append(messages, mongoMessage)
+	}
+
+	componentsHealth["mongodb"] = entity.ComponentHealth{
+		Status:       mongoStatus,
+		LastChecked:  time.Now(),
+		Message:      mongoMessage,
+		ResponseTime: mongoLatency,
+	}
+
+	// Check messaging service (NATS)
+	messagingStart := time.Now()
+	messagingErr := s.checkMessagingHealth(ctx)
+	messagingLatency := time.Since(messagingStart)
+
+	messagingStatus := entity.HealthStatusHealthy
+	messagingMessage := "Messaging service healthy"
+
+	if messagingErr != nil {
+		messagingStatus = entity.HealthStatusDegraded // Non-critical for crawler operation
+		messagingMessage = fmt.Sprintf("Messaging service issues: %v", messagingErr)
+		if overallStatus == entity.HealthStatusHealthy {
+			overallStatus = entity.HealthStatusDegraded
+		}
+		messages = append(messages, messagingMessage)
+	}
+
+	componentsHealth["messaging"] = entity.ComponentHealth{
+		Status:       messagingStatus,
+		LastChecked:  time.Now(),
+		Message:      messagingMessage,
+		ResponseTime: messagingLatency,
+	}
+
+	// Determine overall message
+	overallMessage := "All systems operational"
+	if len(messages) > 0 {
+		overallMessage = strings.Join(messages, "; ")
 	}
 
 	health := &entity.SystemHealth{
-		Timestamp: time.Now(),
-		Status:    status,
-		Message:   message,
-		Network:   s.config.Ethereum.Network,
-		ComponentsHealth: map[string]entity.ComponentHealth{
-			"blockchain": {
-				Status:       status,
-				LastChecked:  time.Now(),
-				Message:      message,
-				ResponseTime: networkLatency,
-			},
-		},
+		Timestamp:        time.Now(),
+		Status:           overallStatus,
+		Message:          overallMessage,
+		Network:          s.config.Ethereum.Network,
+		ComponentsHealth: componentsHealth,
 	}
 
-	return s.metricsRepo.SaveSystemHealth(ctx, health)
+	// Try to save health status, but don't fail if MongoDB is down
+	if err := s.metricsRepo.SaveSystemHealth(ctx, health); err != nil {
+		s.logger.Warn("Failed to save system health metrics", zap.Error(err))
+		// Don't return error here as health check should continue even if we can't save metrics
+	}
+
+	// Update health check tracking
+	s.mu.Lock()
+	s.lastHealthCheckTime = time.Now()
+	if overallStatus == entity.HealthStatusUnhealthy {
+		s.consecutiveHealthCheckFailures++
+	} else {
+		s.consecutiveHealthCheckFailures = 0
+	}
+	failures := s.consecutiveHealthCheckFailures
+	s.mu.Unlock()
+
+	// Log health status
+	s.logger.Info("Health check completed",
+		zap.String("overall_status", string(overallStatus)),
+		zap.String("message", overallMessage),
+		zap.Duration("total_time", time.Since(start)),
+		zap.Int("consecutive_failures", failures))
+
+	// Take recovery actions if needed
+	if failures >= 3 {
+		s.logger.Warn("Multiple consecutive health check failures detected, attempting recovery",
+			zap.Int("failure_count", failures))
+
+		// Attempt to recover connections
+		go s.attemptRecovery(context.Background())
+	}
+
+	return nil
+}
+
+// checkMongoDBHealth checks MongoDB connection health
+func (s *CrawlerService) checkMongoDBHealth(ctx context.Context) error {
+	// Try to get last processed block to test MongoDB connection
+	_, err := s.blockRepo.GetLastProcessedBlock(ctx, s.config.Ethereum.Network)
+	if err != nil {
+		// If it's a "no documents" error, MongoDB is working fine
+		if strings.Contains(err.Error(), "no documents") {
+			return nil
+		}
+		return fmt.Errorf("mongodb health check failed: %w", err)
+	}
+	return nil
+}
+
+// checkMessagingHealth checks messaging service health
+func (s *CrawlerService) checkMessagingHealth(ctx context.Context) error {
+	// For now, we'll assume messaging is healthy if the service is not nil
+	// In the future, we could add a proper health check method to the messaging service
+	if s.messagingService == nil {
+		return fmt.Errorf("messaging service is not initialized")
+	}
+	return nil
+}
+
+// attemptRecovery attempts to recover from health check failures
+func (s *CrawlerService) attemptRecovery(ctx context.Context) {
+	s.logger.Info("Starting recovery process")
+
+	// Try to reconnect to blockchain
+	if err := s.blockchainService.Connect(ctx); err != nil {
+		s.logger.Error("Failed to reconnect to blockchain during recovery", zap.Error(err))
+	} else {
+		s.logger.Info("Successfully reconnected to blockchain")
+	}
+
+	// Reset failure counter on successful recovery attempt
+	s.mu.Lock()
+	s.consecutiveHealthCheckFailures = 0
+	s.mu.Unlock()
+
+	s.logger.Info("Recovery process completed")
 }
 
 // updateProcessingMetrics updates processing metrics
