@@ -289,6 +289,11 @@ websocket-test:
 	@echo "$(BLUE)Testing WebSocket Listener Service...$(NC)"
 	./scripts/test-websocket-listener.sh
 
+## Test WebSocket Listener auto-reconnect functionality
+websocket-test-reconnect:
+	@echo "$(BLUE)Testing WebSocket Listener Auto-Reconnect...$(NC)"
+	./scripts/test-auto-reconnect.sh
+
 # ===== Scheduler Service =====
 
 ## Build Scheduler

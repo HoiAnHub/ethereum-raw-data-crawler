@@ -46,6 +46,9 @@ WebSocket Listener Service đã được tạo hoàn chỉnh và sẵn sàng đ�
 cp env.websocket-listener.example .env
 # Edit .env với Ethereum WebSocket URL
 
+# Build Docker image - just to test
+docker-compose -f docker-compose.websocket-listener.yml build --no-cache ethereum-websocket-listener
+
 # Start service
 make websocket-up
 

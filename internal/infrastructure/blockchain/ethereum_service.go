@@ -79,6 +79,50 @@ func (s *EthereumService) IsConnected() bool {
 	return s.isConnected && s.client != nil
 }
 
+// reconnect attempts to reconnect to Ethereum node
+func (s *EthereumService) reconnect(ctx context.Context) error {
+	s.logger.Warn("Attempting to reconnect to Ethereum node")
+
+	// Disconnect first
+	s.Disconnect()
+
+	// Try to reconnect
+	if err := s.Connect(ctx); err != nil {
+		s.logger.Error("Failed to reconnect to Ethereum node", zap.Error(err))
+		return err
+	}
+
+	s.logger.Info("Successfully reconnected to Ethereum node")
+	return nil
+}
+
+// isConnectionError checks if the error indicates a connection problem
+func (s *EthereumService) isConnectionError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	errStr := err.Error()
+	connectionErrors := []string{
+		"connection refused",
+		"connection reset",
+		"EOF",
+		"context deadline exceeded",
+		"no such host",
+		"network unreachable",
+		"broken pipe",
+		"connection timed out",
+	}
+
+	for _, connErr := range connectionErrors {
+		if strings.Contains(strings.ToLower(errStr), connErr) {
+			return true
+		}
+	}
+
+	return false
+}
+
 // GetLatestBlockNumber gets latest block number
 func (s *EthereumService) GetLatestBlockNumber(ctx context.Context) (*big.Int, error) {
 	if !s.IsConnected() {
@@ -97,7 +141,9 @@ func (s *EthereumService) GetLatestBlockNumber(ctx context.Context) (*big.Int, e
 // GetBlockByNumber gets block by number with rate limiting and retry logic
 func (s *EthereumService) GetBlockByNumber(ctx context.Context, blockNumber *big.Int) (*entity.Block, error) {
 	if !s.IsConnected() {
-		return nil, ErrNotConnected
+		if err := s.reconnect(ctx); err != nil {
+			return nil, ErrNotConnected
+		}
 	}
 
 	s.logger.Debug("Getting block by number", zap.String("block_number", blockNumber.String()))
@@ -112,6 +158,14 @@ func (s *EthereumService) GetBlockByNumber(ctx context.Context, blockNumber *big
 		block, err = s.client.BlockByNumber(ctx, blockNumber)
 		if err == nil {
 			break
+		}
+
+		// Check if this is a connection error and try to reconnect
+		if s.isConnectionError(err) && attempt == 1 {
+			s.logger.Warn("Connection error detected, attempting reconnect", zap.Error(err))
+			if reconnectErr := s.reconnect(ctx); reconnectErr == nil {
+				continue // Retry after successful reconnect
+			}
 		}
 
 		// Handle rate limiting
@@ -201,7 +255,9 @@ func (s *EthereumService) GetTransactionReceipt(ctx context.Context, txHash stri
 // GetTransactionsByBlock gets all transactions in a block
 func (s *EthereumService) GetTransactionsByBlock(ctx context.Context, blockNumber *big.Int) ([]*entity.Transaction, error) {
 	if !s.IsConnected() {
-		return nil, ErrNotConnected
+		if err := s.reconnect(ctx); err != nil {
+			return nil, ErrNotConnected
+		}
 	}
 
 	block, err := s.client.BlockByNumber(ctx, blockNumber)
