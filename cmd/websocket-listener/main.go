@@ -111,6 +111,7 @@ func registerWebSocketListenerHooks(
 	cfg *config.Config,
 	logger *logger.Logger,
 	db *database.MongoDB,
+	blockchainService service.BlockchainService,
 	messagingService service.MessagingService,
 	webSocketListenerService *appservice.WebSocketListenerAppService,
 ) {
@@ -126,6 +127,13 @@ func registerWebSocketListenerHooks(
 				logger.Error("Failed to create database indexes", zap.Error(err))
 				return err
 			}
+
+			// Connect to blockchain service (required for fetching block details)
+			if err := blockchainService.Connect(ctx); err != nil {
+				logger.Error("Failed to connect to blockchain service", zap.Error(err))
+				return err
+			}
+			logger.Info("Successfully connected to blockchain service")
 
 			// Connect to messaging service (optional)
 			if cfg.NATS.Enabled {
@@ -166,6 +174,11 @@ func registerWebSocketListenerHooks(
 			// Stop websocket listener service
 			if err := webSocketListenerService.Stop(ctx); err != nil {
 				logger.Error("Error stopping websocket listener service", zap.Error(err))
+			}
+
+			// Disconnect from blockchain service
+			if err := blockchainService.Disconnect(); err != nil {
+				logger.Error("Error disconnecting from blockchain service", zap.Error(err))
 			}
 
 			// Disconnect from messaging service
