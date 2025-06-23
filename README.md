@@ -112,6 +112,16 @@ GRAPHQL_PLAYGROUND=true
 # Monitoring Configuration
 METRICS_ENABLED=true
 HEALTH_CHECK_INTERVAL=30s
+
+# NATS JetStream Configuration
+NATS_URL=nats://localhost:4222
+NATS_STREAM_NAME=TRANSACTIONS
+NATS_SUBJECT_PREFIX=transactions
+NATS_CONNECT_TIMEOUT=10s
+NATS_RECONNECT_ATTEMPTS=5
+NATS_RECONNECT_DELAY=2s
+NATS_MAX_PENDING_MESSAGES=1000
+NATS_ENABLED=true
 ```
 
 ## Installation & Setup
@@ -120,6 +130,7 @@ HEALTH_CHECK_INTERVAL=30s
 
 - Go 1.21+
 - MongoDB 5.0+
+- NATS Server with JetStream (for real-time event streaming)
 - Ethereum RPC access (Infura, Alchemy, or local node)
 
 ### Installation
@@ -141,12 +152,14 @@ cp env.example .env
 # Edit .env with your configuration
 ```
 
-4. **Start MongoDB**:
+4. **Start MongoDB and NATS**:
 ```bash
-# Using Docker
-docker run -d -p 27017:27017 --name mongodb mongo:5.0
+# Using Docker Compose (recommended)
+docker-compose up -d mongodb nats
 
-# Or use your existing MongoDB instance
+# Or start individually
+docker run -d -p 27017:27017 --name mongodb mongo:5.0
+docker run -d -p 4222:4222 -p 8222:8222 --name nats nats:2.10-alpine --jetstream
 ```
 
 5. **Run the crawler**:
@@ -172,10 +185,12 @@ go run cmd/crawler/main.go
 The crawler automatically:
 1. Connects to the Ethereum network
 2. Initializes MongoDB indexes
-3. Resumes from the last processed block
-4. Processes blocks concurrently in batches
-5. Stores data in MongoDB
-6. Monitors system health
+3. Connects to NATS JetStream for event streaming
+4. Resumes from the last processed block
+5. Processes blocks concurrently in batches
+6. Publishes transaction events to NATS before storing in MongoDB
+7. Stores data in MongoDB
+8. Monitors system health
 
 #### 2. Real-time Scheduler (Live Data)
 The scheduler processes new blocks immediately as they are created:
@@ -190,10 +205,12 @@ go run cmd/schedulers/main.go
 
 The scheduler automatically:
 1. Connects to Ethereum WebSocket
-2. Listens for new block notifications
-3. Processes blocks immediately upon creation
-4. Falls back to polling if WebSocket fails
-5. Provides real-time data processing
+2. Connects to NATS JetStream for event streaming
+3. Listens for new block notifications
+4. Processes blocks immediately upon creation
+5. Publishes transaction events to NATS in real-time
+6. Falls back to polling if WebSocket fails
+7. Provides real-time data processing
 
 ### Scheduler Configuration
 
@@ -217,6 +234,83 @@ ETHEREUM_WS_URL=wss://mainnet.infura.io/ws/v3/YOUR_PROJECT_ID
 - `realtime`: WebSocket only (fastest, requires stable connection)
 - `polling`: Traditional polling (most reliable)
 - `hybrid`: WebSocket with polling fallback (recommended)
+
+### NATS JetStream Integration
+
+The crawler integrates with NATS JetStream to provide real-time event streaming for transaction data. This enables downstream applications to consume transaction events as they are processed.
+
+#### Configuration
+
+Configure NATS JetStream in your `.env` file:
+
+```bash
+# NATS JetStream Configuration
+NATS_URL=nats://localhost:4222           # NATS server URL
+NATS_STREAM_NAME=TRANSACTIONS            # JetStream stream name
+NATS_SUBJECT_PREFIX=transactions         # Subject prefix for events
+NATS_CONNECT_TIMEOUT=10s                 # Connection timeout
+NATS_RECONNECT_ATTEMPTS=5                # Reconnection attempts
+NATS_RECONNECT_DELAY=2s                  # Delay between reconnection attempts
+NATS_MAX_PENDING_MESSAGES=1000           # Max pending messages
+NATS_ENABLED=true                        # Enable/disable NATS publishing
+```
+
+#### Event Flow
+
+1. **Transaction Processing**: When transactions are processed from blocks
+2. **Event Publishing**: Transaction events are published to NATS JetStream
+3. **Database Storage**: Transactions are then stored in MongoDB
+4. **Event Consumption**: Downstream services can consume events from NATS
+
+#### Event Format
+
+Transaction events are published in JSON format:
+
+```json
+{
+  "hash": "0x1234567890abcdef",
+  "from": "0x1234567890123456789012345678901234567890",
+  "to": "0x742d35Cc6634C0532925a3b8D4C9db96C4b4d8b6",
+  "value": "1000000000000000000",
+  "data": "0x",
+  "block_number": "12345",
+  "block_hash": "0xabcdef1234567890",
+  "timestamp": "2023-12-01T10:00:00Z",
+  "gas_used": "21000",
+  "gas_price": "20000000000",
+  "network": "mainnet"
+}
+```
+
+#### Consuming Events
+
+Downstream applications can consume transaction events from NATS:
+
+```go
+// Example consumer
+nc, _ := nats.Connect("nats://localhost:4222")
+js, _ := nc.JetStream()
+
+// Subscribe to transaction events
+sub, _ := js.Subscribe("transactions.events", func(msg *nats.Msg) {
+    var txEvent TransactionEvent
+    json.Unmarshal(msg.Data, &txEvent)
+
+    // Process transaction event
+    processTransaction(txEvent)
+
+    // Acknowledge message
+    msg.Ack()
+})
+```
+
+#### Benefits
+
+- **Real-time Processing**: Events are published immediately as transactions are processed
+- **Decoupling**: Downstream services don't need direct database access
+- **Reliability**: JetStream provides message persistence and delivery guarantees
+- **Scalability**: Multiple consumers can process events independently
+- **Fault Tolerance**: Built-in retry and error handling
 
 ### Monitoring
 
@@ -311,6 +405,27 @@ golangci-lint run
 ```
 
 ## Production Deployment
+
+### Docker Compose
+
+The project includes a complete Docker Compose setup with all required services:
+
+```bash
+# Start all services (MongoDB, NATS, Crawler)
+docker-compose up -d
+
+# View logs
+docker-compose logs -f ethereum-crawler
+
+# Stop all services
+docker-compose down
+```
+
+The Docker Compose setup includes:
+- **MongoDB**: Database for storing blockchain data
+- **NATS JetStream**: Message streaming for real-time events
+- **Ethereum Crawler**: Main application
+- **Prometheus**: Metrics collection (optional)
 
 ### Docker
 ```dockerfile

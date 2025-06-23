@@ -20,6 +20,7 @@ import (
 // CrawlerService handles the main crawling logic
 type CrawlerService struct {
 	blockchainService service.BlockchainService
+	messagingService  service.MessagingService
 	blockRepo         repository.BlockRepository
 	txRepo            repository.TransactionRepository
 	metricsRepo       repository.MetricsRepository
@@ -53,6 +54,7 @@ type CrawlerMetrics struct {
 // NewCrawlerService creates new crawler service
 func NewCrawlerService(
 	blockchainService service.BlockchainService,
+	messagingService service.MessagingService,
 	blockRepo repository.BlockRepository,
 	txRepo repository.TransactionRepository,
 	metricsRepo repository.MetricsRepository,
@@ -61,6 +63,7 @@ func NewCrawlerService(
 ) *CrawlerService {
 	return &CrawlerService{
 		blockchainService: blockchainService,
+		messagingService:  messagingService,
 		blockRepo:         blockRepo,
 		txRepo:            txRepo,
 		metricsRepo:       metricsRepo,
@@ -442,6 +445,14 @@ func (s *CrawlerService) saveTransactions(ctx context.Context, transactions []*e
 	start := time.Now()
 	txCount := len(transactions)
 
+	// Publish transactions to NATS JetStream before saving to MongoDB
+	if err := s.publishTransactions(ctx, transactions, logger); err != nil {
+		logger.Warn("Failed to publish transactions to messaging service",
+			zap.Error(err),
+			zap.Int("transaction_count", txCount))
+		// Continue with database save even if messaging fails
+	}
+
 	if s.config.Crawler.UseUpsert {
 		// Try upsert first
 		logger.Debug("Attempting batch upsert", zap.Int("transaction_count", txCount))
@@ -502,6 +513,37 @@ func (s *CrawlerService) saveTransactions(ctx context.Context, transactions []*e
 			zap.Duration("duration", duration))
 		return nil
 	}
+}
+
+// publishTransactions publishes transactions to messaging service
+func (s *CrawlerService) publishTransactions(ctx context.Context, transactions []*entity.Transaction, logger *logger.Logger) error {
+	if s.messagingService == nil {
+		logger.Debug("Messaging service not available, skipping transaction publishing")
+		return nil
+	}
+
+	if !s.messagingService.IsConnected() {
+		logger.Debug("Messaging service not connected, skipping transaction publishing")
+		return nil
+	}
+
+	start := time.Now()
+	err := s.messagingService.PublishTransactions(ctx, transactions)
+	duration := time.Since(start)
+
+	if err != nil {
+		logger.Error("Failed to publish transactions to messaging service",
+			zap.Error(err),
+			zap.Int("transaction_count", len(transactions)),
+			zap.Duration("duration", duration))
+		return err
+	}
+
+	logger.Debug("Successfully published transactions to messaging service",
+		zap.Int("transaction_count", len(transactions)),
+		zap.Duration("duration", duration))
+
+	return nil
 }
 
 // metricsWorker periodically saves metrics to database

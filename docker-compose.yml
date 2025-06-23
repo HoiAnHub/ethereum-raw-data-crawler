@@ -24,6 +24,34 @@ services:
       retries: 3
       start_period: 40s
 
+  # NATS JetStream server
+  nats:
+    image: nats:2.10-alpine
+    container_name: ethereum-crawler-nats
+    restart: unless-stopped
+    ports:
+      - "4222:4222"  # NATS client port
+      - "8222:8222"  # HTTP monitoring port
+      - "6222:6222"  # Cluster port
+    command: [
+      "--jetstream",
+      "--store_dir=/data",
+      "--http_port=8222",
+      "--port=4222",
+      "--cluster_name=ethereum-cluster",
+      "--cluster=nats://0.0.0.0:6222"
+    ]
+    volumes:
+      - nats_data:/data
+    networks:
+      - crawler-network
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8222/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
+
   # Ethereum crawler application
   ethereum-crawler:
     build:
@@ -33,6 +61,8 @@ services:
     restart: unless-stopped
     depends_on:
       mongodb:
+        condition: service_healthy
+      nats:
         condition: service_healthy
     environment:
       # MongoDB Configuration
@@ -47,6 +77,12 @@ services:
       # Application Configuration
       APP_ENV: development
       LOG_LEVEL: info
+
+      # NATS Configuration
+      NATS_URL: nats://nats:4222
+      NATS_STREAM_NAME: TRANSACTIONS
+      NATS_SUBJECT_PREFIX: transactions
+      NATS_ENABLED: true
 
       # Crawler Configuration
       BATCH_SIZE: ${BATCH_SIZE:-10}
@@ -109,6 +145,8 @@ services:
 
 volumes:
   mongodb_data:
+    driver: local
+  nats_data:
     driver: local
   prometheus_data:
     driver: local

@@ -10,6 +10,7 @@ import (
 	"ethereum-raw-data-crawler/internal/infrastructure/config"
 	"ethereum-raw-data-crawler/internal/infrastructure/database"
 	"ethereum-raw-data-crawler/internal/infrastructure/logger"
+	"ethereum-raw-data-crawler/internal/infrastructure/messaging"
 	"os"
 	"os/signal"
 	"syscall"
@@ -42,6 +43,14 @@ func main() {
 		// Infrastructure
 		fx.Provide(logger.NewLogger),
 		fx.Provide(database.NewMongoDB),
+
+		// Messaging service
+		fx.Provide(
+			fx.Annotate(
+				messaging.NewNATSMessagingService,
+				fx.As(new(service.MessagingService)),
+			),
+		),
 
 		// Blockchain service
 		fx.Provide(
@@ -96,6 +105,7 @@ func registerSchedulerHooks(
 	cfg *config.Config,
 	logger *logger.Logger,
 	db *database.MongoDB,
+	messagingService service.MessagingService,
 	crawlerService *appservice.CrawlerService,
 	schedulerService *appservice.SchedulerService,
 ) {
@@ -109,6 +119,12 @@ func registerSchedulerHooks(
 			// Create database indexes
 			if err := db.CreateIndexes(ctx); err != nil {
 				logger.Error("Failed to create database indexes", zap.Error(err))
+				return err
+			}
+
+			// Connect to messaging service
+			if err := messagingService.Connect(ctx); err != nil {
+				logger.Error("Failed to connect to messaging service", zap.Error(err))
 				return err
 			}
 
@@ -163,6 +179,11 @@ func registerSchedulerHooks(
 			// Stop crawler service
 			if err := crawlerService.Stop(ctx); err != nil {
 				logger.Error("Error stopping crawler service", zap.Error(err))
+			}
+
+			// Disconnect from messaging service
+			if err := messagingService.Disconnect(); err != nil {
+				logger.Error("Error disconnecting from messaging service", zap.Error(err))
 			}
 
 			// Close database connection

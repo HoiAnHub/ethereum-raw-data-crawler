@@ -18,6 +18,7 @@ type Config struct {
 	Scheduler  SchedulerConfig  `mapstructure:"scheduler"`
 	GraphQL    GraphQLConfig    `mapstructure:"graphql"`
 	Monitoring MonitoringConfig `mapstructure:"monitoring"`
+	NATS       NATSConfig       `mapstructure:"nats"`
 }
 
 // AppConfig represents application configuration
@@ -80,6 +81,18 @@ type GraphQLConfig struct {
 type MonitoringConfig struct {
 	MetricsEnabled      bool          `mapstructure:"metrics_enabled"`
 	HealthCheckInterval time.Duration `mapstructure:"health_check_interval"`
+}
+
+// NATSConfig represents NATS JetStream configuration
+type NATSConfig struct {
+	URL                string        `mapstructure:"url"`
+	StreamName         string        `mapstructure:"stream_name"`
+	SubjectPrefix      string        `mapstructure:"subject_prefix"`
+	ConnectTimeout     time.Duration `mapstructure:"connect_timeout"`
+	ReconnectAttempts  int           `mapstructure:"reconnect_attempts"`
+	ReconnectDelay     time.Duration `mapstructure:"reconnect_delay"`
+	MaxPendingMessages int           `mapstructure:"max_pending_messages"`
+	Enabled            bool          `mapstructure:"enabled"`
 }
 
 // loadEnvFile manually loads environment variables from .env file
@@ -178,6 +191,16 @@ func setDefaults() {
 	// Monitoring defaults
 	viper.SetDefault("monitoring.metrics_enabled", true)
 	viper.SetDefault("monitoring.health_check_interval", "30s")
+
+	// NATS defaults
+	viper.SetDefault("nats.url", "nats://localhost:4222")
+	viper.SetDefault("nats.stream_name", "TRANSACTIONS")
+	viper.SetDefault("nats.subject_prefix", "transactions")
+	viper.SetDefault("nats.connect_timeout", "10s")
+	viper.SetDefault("nats.reconnect_attempts", 5)
+	viper.SetDefault("nats.reconnect_delay", "2s")
+	viper.SetDefault("nats.max_pending_messages", 1000)
+	viper.SetDefault("nats.enabled", true)
 }
 
 func bindEnvVars() {
@@ -224,4 +247,14 @@ func bindEnvVars() {
 	// Monitoring
 	viper.BindEnv("monitoring.metrics_enabled", "METRICS_ENABLED")
 	viper.BindEnv("monitoring.health_check_interval", "HEALTH_CHECK_INTERVAL")
+
+	// NATS
+	viper.BindEnv("nats.url", "NATS_URL")
+	viper.BindEnv("nats.stream_name", "NATS_STREAM_NAME")
+	viper.BindEnv("nats.subject_prefix", "NATS_SUBJECT_PREFIX")
+	viper.BindEnv("nats.connect_timeout", "NATS_CONNECT_TIMEOUT")
+	viper.BindEnv("nats.reconnect_attempts", "NATS_RECONNECT_ATTEMPTS")
+	viper.BindEnv("nats.reconnect_delay", "NATS_RECONNECT_DELAY")
+	viper.BindEnv("nats.max_pending_messages", "NATS_MAX_PENDING_MESSAGES")
+	viper.BindEnv("nats.enabled", "NATS_ENABLED")
 }

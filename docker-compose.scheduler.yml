@@ -38,7 +38,8 @@ services:
         condition: service_healthy
     environment:
       # MongoDB Configuration
-      MONGO_URI: mongodb://admin:password@mongodb:27017/ethereum_raw_data?authSource=admin
+      # MONGO_URI: mongodb://admin:password@mongodb:27017/ethereum_raw_data?authSource=admin
+      MONGO_URI: ${MONGO_URI:-mongodb://admin:password@mongodb:27017/ethereum_raw_data?authSource=admin}
       MONGO_DATABASE: ethereum_raw_data
 
       # Ethereum Configuration
