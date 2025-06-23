@@ -1,484 +1,372 @@
-# Ethereum Raw Data Crawler
+# Ethereum Block Scheduler
 
-A high-performance, scalable Ethereum blockchain data crawler built with Go, designed to extract and store raw blockchain data for downstream applications.
+A robust Ethereum block scheduler service that efficiently monitors and processes Ethereum blockchain data in real-time or polling mode.
 
-## Features
+## ✨ Features
 
-- **High Performance**: Concurrent block processing with configurable worker pools
-- **Real-time Processing**: WebSocket-based scheduler for immediate block processing
-- **Hybrid Scheduling**: Combines real-time WebSocket with polling fallback
-- **Scalable Architecture**: Hexagonal architecture with dependency injection using uber-go/fx
-- **Comprehensive Data Storage**: Stores blocks, transactions, and metadata in MongoDB
-- **Real-time Monitoring**: GraphQL API for system health and metrics monitoring
-- **Extensible Design**: Modular structure ready for multi-blockchain support
-- **Production Ready**: Robust error handling, logging, and graceful shutdown
+- **Multi-Mode Operation**: Supports realtime (WebSocket), polling, and hybrid modes
+- **Real-time Block Processing**: WebSocket-based real-time block monitoring
+- **Fallback Polling**: Automatic fallback to polling when WebSocket fails
+- **Configurable Scheduling**: Flexible configuration for different use cases
+- **Docker Support**: Full Docker and Docker Compose support
+- **Database Integration**: MongoDB integration for data persistence
+- **Health Monitoring**: Built-in health checks and monitoring
+- **Error Recovery**: Automatic reconnection and error recovery
 
-## Architecture
+## 🚀 Quick Start
+
+### Prerequisites
+
+- Go 1.21 or higher
+- Docker and Docker Compose
+- MongoDB
+- Ethereum RPC endpoint (Infura/Alchemy recommended)
+
+### Setup
+
+1. **Clone and setup environment:**
+   ```bash
+   git clone <repository-url>
+   cd ethereum-raw-data-crawler
+   make setup
+   ```
+
+2. **Configure environment:**
+   ```bash
+   cp env.example .env
+   # Edit .env with your Ethereum RPC URLs and MongoDB settings
+   ```
+
+3. **Start the scheduler:**
+   ```bash
+   # Using Docker (recommended)
+   make scheduler-up
+
+   # Or using the dedicated script
+   ./scripts/run-scheduler.sh docker
+
+   # Or build and run locally
+   make build && make run
+   ```
+
+## 📋 Usage
+
+### Using run-scheduler.sh Script
+
+The `./scripts/run-scheduler.sh` script provides a convenient interface:
+
+```bash
+# Development mode
+./scripts/run-scheduler.sh dev
+
+# Docker mode (detached)
+./scripts/run-scheduler.sh docker
+
+# Docker development mode (with logs)
+./scripts/run-scheduler.sh docker-dev
+
+# Build binary
+./scripts/run-scheduler.sh build
+
+# Run built binary
+./scripts/run-scheduler.sh run
+
+# View logs
+./scripts/run-scheduler.sh logs --follow
+
+# Stop services
+./scripts/run-scheduler.sh stop
+
+# Clean up Docker resources
+./scripts/run-scheduler.sh clean
+```
+
+### Using Makefile
+
+```bash
+# Build scheduler
+make build
+
+# Run locally
+make run
+
+# Start with Docker Compose
+make scheduler-up
+
+# View logs
+make scheduler-logs
+
+# Stop services
+make scheduler-down
+
+# Check status
+make scheduler-status
+
+# Run tests
+make test
+```
+
+## ⚙️ Configuration
+
+Key environment variables in `.env`:
+
+```bash
+# Ethereum Configuration
+ETHEREUM_RPC_URL=https://mainnet.infura.io/v3/YOUR_PROJECT_ID
+ETHEREUM_WS_URL=wss://mainnet.infura.io/ws/v3/YOUR_PROJECT_ID
+
+# MongoDB Configuration
+MONGO_URI=mongodb://admin:password@localhost:27017/ethereum_raw_data?authSource=admin
+
+# Scheduler Configuration
+SCHEDULER_MODE=hybrid                    # realtime, polling, or hybrid
+SCHEDULER_ENABLE_REALTIME=true
+SCHEDULER_ENABLE_POLLING=true
+SCHEDULER_POLLING_INTERVAL=3s
+SCHEDULER_FALLBACK_TIMEOUT=30s
+
+# Rate Limiting (for free tier APIs)
+ETHEREUM_RATE_LIMIT=1s
+ETHEREUM_REQUEST_TIMEOUT=120s
+ETHEREUM_SKIP_RECEIPTS=true
+
+# Application Configuration
+APP_ENV=production
+LOG_LEVEL=info
+```
+
+## 🏗️ Architecture
+
+The scheduler operates in three modes:
+
+### 1. Realtime Mode
+- Uses WebSocket connections to receive new blocks immediately
+- Minimal latency but requires stable WebSocket connection
+- Best for real-time applications
+
+### 2. Polling Mode
+- Periodically polls for new blocks via RPC
+- More reliable but higher latency
+- Better for rate-limited APIs
+
+### 3. Hybrid Mode (Recommended)
+- Combines both realtime and polling
+- Uses WebSocket as primary with polling fallback
+- Automatically switches between modes based on connection health
+
+## 📊 Monitoring
+
+### Health Checks
+
+The scheduler includes built-in health monitoring:
+
+```bash
+# Check container health
+docker ps | grep ethereum-scheduler
+
+# View detailed logs
+make scheduler-logs
+
+# Check service status
+make scheduler-status
+```
+
+### Key Metrics
+
+- Block processing rate
+- Connection status (WebSocket/RPC)
+- Error rates and recovery
+- Database write performance
+
+## 🛠️ Development
 
 ### Project Structure
 
 ```
-ethereum-raw-data-crawler/
-├── cmd/
-│   ├── crawler/           # Main crawler application (batch processing)
-│   ├── schedulers/        # Real-time block scheduler
-│   └── api/               # GraphQL API server
+.
+├── cmd/schedulers/          # Scheduler entry point
 ├── internal/
-│   ├── adapters/
-│   │   ├── primary/       # HTTP handlers, GraphQL resolvers
-│   │   └── secondary/     # Repository implementations
-│   ├── application/
-│   │   ├── service/       # Application services
-│   │   └── usecase/       # Business use cases
-│   ├── domain/
-│   │   ├── entity/        # Domain entities
-│   │   ├── repository/    # Repository interfaces
-│   │   └── service/       # Domain service interfaces
-│   └── infrastructure/
-│       ├── config/        # Configuration management
-│       ├── database/      # Database connections
-│       ├── blockchain/    # Blockchain client
-│       └── logger/        # Logging infrastructure
-├── pkg/
-│   ├── errors/           # Custom error types
-│   └── utils/            # Utility functions
-├── deployments/          # Docker, K8s configs
-├── docs/                 # Documentation
-└── scripts/              # Build and deployment scripts
+│   ├── application/service/ # Application logic
+│   ├── domain/             # Domain entities and interfaces
+│   ├── infrastructure/     # Infrastructure implementations
+│   └── adapters/           # Database adapters
+├── scripts/                # Utility scripts
+├── docker-compose.scheduler.yml
+├── Dockerfile.scheduler
+└── Makefile
 ```
 
-### Key Components
-
-1. **Domain Layer**: Core business logic and entities
-2. **Application Layer**: Orchestrates business operations
-3. **Infrastructure Layer**: External concerns (database, blockchain, etc.)
-4. **Adapters**: Interface implementations
-
-## Data Model
-
-### Collections
-
-#### Blocks Collection
-- **Document Structure**: Complete Ethereum block data
-- **Indexes**: block number, hash, timestamp, network, status
-- **Purpose**: Store raw block data for analysis
-
-#### Transactions Collection
-- **Document Structure**: Detailed transaction data with receipts
-- **Indexes**: hash, block_hash, from/to addresses, block_number
-- **Purpose**: Store all transaction data for comprehensive analysis
-
-#### Crawler Metrics Collection
-- **Document Structure**: Performance and operational metrics
-- **Indexes**: timestamp, network
-- **Purpose**: Monitor crawler performance and health
-
-#### System Health Collection
-- **Document Structure**: System health status and component checks
-- **Indexes**: timestamp, network, status
-- **Purpose**: Track system health over time
-
-## Configuration
-
-Create a `.env` file (copy from `env.example`):
+### Building from Source
 
 ```bash
-# Ethereum RPC Configuration
-ETHEREUM_RPC_URL=https://mainnet.infura.io/v3/YOUR_PROJECT_ID
-ETHEREUM_WS_URL=wss://mainnet.infura.io/v3/YOUR_PROJECT_ID
-START_BLOCK_NUMBER=1
+# Install dependencies
+make deps
 
-# MongoDB Configuration
-MONGO_URI=mongodb://localhost:27017
-MONGO_DATABASE=ethereum_raw_data
-MONGO_CONNECT_TIMEOUT=10s
-MONGO_MAX_POOL_SIZE=100
+# Format and lint code
+make fmt vet lint
 
-# Application Configuration
-APP_PORT=8080
-APP_ENV=development
-LOG_LEVEL=info
+# Run tests
+make test
 
-# Crawler Configuration
-BATCH_SIZE=100
-CONCURRENT_WORKERS=10
-RETRY_ATTEMPTS=3
-RETRY_DELAY=5s
+# Build binary
+make build
 
-# GraphQL Configuration
-GRAPHQL_ENDPOINT=/graphql
-GRAPHQL_PLAYGROUND=true
-
-# Monitoring Configuration
-METRICS_ENABLED=true
-HEALTH_CHECK_INTERVAL=30s
-
-# NATS JetStream Configuration
-NATS_URL=nats://localhost:4222
-NATS_STREAM_NAME=TRANSACTIONS
-NATS_SUBJECT_PREFIX=transactions
-NATS_CONNECT_TIMEOUT=10s
-NATS_RECONNECT_ATTEMPTS=5
-NATS_RECONNECT_DELAY=2s
-NATS_MAX_PENDING_MESSAGES=1000
-NATS_ENABLED=true
-```
-
-## Installation & Setup
-
-### Prerequisites
-
-- Go 1.21+
-- MongoDB 5.0+
-- NATS Server with JetStream (for real-time event streaming)
-- Ethereum RPC access (Infura, Alchemy, or local node)
-
-### Installation
-
-1. **Clone the repository**:
-```bash
-git clone https://github.com/your-org/ethereum-raw-data-crawler.git
-cd ethereum-raw-data-crawler
-```
-
-2. **Install dependencies**:
-```bash
-go mod download
-```
-
-3. **Setup environment**:
-```bash
-cp env.example .env
-# Edit .env with your configuration
-```
-
-4. **Start MongoDB and NATS**:
-```bash
-# Using Docker Compose (recommended)
-docker-compose up -d mongodb nats
-
-# Or start individually
-docker run -d -p 27017:27017 --name mongodb mongo:5.0
-docker run -d -p 4222:4222 -p 8222:8222 --name nats nats:2.10-alpine --jetstream
-```
-
-5. **Run the crawler**:
-```bash
-# For batch processing (historical data)
-go run cmd/crawler/main.go
-
-# For real-time block processing
-go run cmd/schedulers/main.go
-```
-
-## Usage
-
-### Running the Applications
-
-#### 1. Batch Crawler (Historical Data)
-The main crawler processes blocks in batches for historical data:
-
-```bash
-go run cmd/crawler/main.go
-```
-
-The crawler automatically:
-1. Connects to the Ethereum network
-2. Initializes MongoDB indexes
-3. Connects to NATS JetStream for event streaming
-4. Resumes from the last processed block
-5. Processes blocks concurrently in batches
-6. Publishes transaction events to NATS before storing in MongoDB
-7. Stores data in MongoDB
-8. Monitors system health
-
-#### 2. Real-time Scheduler (Live Data)
-The scheduler processes new blocks immediately as they are created:
-
-```bash
-# Using the helper script
-./scripts/run-scheduler.sh dev
-
-# Or directly
-go run cmd/schedulers/main.go
-```
-
-The scheduler automatically:
-1. Connects to Ethereum WebSocket
-2. Connects to NATS JetStream for event streaming
-3. Listens for new block notifications
-4. Processes blocks immediately upon creation
-5. Publishes transaction events to NATS in real-time
-6. Falls back to polling if WebSocket fails
-7. Provides real-time data processing
-
-### Scheduler Configuration
-
-Configure the scheduler mode in your `.env` file:
-
-```bash
-# Scheduler Configuration
-SCHEDULER_MODE=hybrid                    # polling, realtime, hybrid
-SCHEDULER_ENABLE_REALTIME=true          # Enable WebSocket
-SCHEDULER_ENABLE_POLLING=true           # Enable polling fallback
-SCHEDULER_POLLING_INTERVAL=3s           # Polling interval
-SCHEDULER_FALLBACK_TIMEOUT=30s          # Fallback timeout
-SCHEDULER_RECONNECT_ATTEMPTS=5          # WebSocket reconnection attempts
-SCHEDULER_RECONNECT_DELAY=5s            # Reconnection delay
-
-# Required for real-time mode
-ETHEREUM_WS_URL=wss://mainnet.infura.io/ws/v3/YOUR_PROJECT_ID
-```
-
-**Scheduler Modes:**
-- `realtime`: WebSocket only (fastest, requires stable connection)
-- `polling`: Traditional polling (most reliable)
-- `hybrid`: WebSocket with polling fallback (recommended)
-
-### NATS JetStream Integration
-
-The crawler integrates with NATS JetStream to provide real-time event streaming for transaction data. This enables downstream applications to consume transaction events as they are processed.
-
-#### Configuration
-
-Configure NATS JetStream in your `.env` file:
-
-```bash
-# NATS JetStream Configuration
-NATS_URL=nats://localhost:4222           # NATS server URL
-NATS_STREAM_NAME=TRANSACTIONS            # JetStream stream name
-NATS_SUBJECT_PREFIX=transactions         # Subject prefix for events
-NATS_CONNECT_TIMEOUT=10s                 # Connection timeout
-NATS_RECONNECT_ATTEMPTS=5                # Reconnection attempts
-NATS_RECONNECT_DELAY=2s                  # Delay between reconnection attempts
-NATS_MAX_PENDING_MESSAGES=1000           # Max pending messages
-NATS_ENABLED=true                        # Enable/disable NATS publishing
-```
-
-#### Event Flow
-
-1. **Transaction Processing**: When transactions are processed from blocks
-2. **Event Publishing**: Transaction events are published to NATS JetStream
-3. **Database Storage**: Transactions are then stored in MongoDB
-4. **Event Consumption**: Downstream services can consume events from NATS
-
-#### Event Format
-
-Transaction events are published in JSON format:
-
-```json
-{
-  "hash": "0x1234567890abcdef",
-  "from": "0x1234567890123456789012345678901234567890",
-  "to": "0x742d35Cc6634C0532925a3b8D4C9db96C4b4d8b6",
-  "value": "1000000000000000000",
-  "data": "0x",
-  "block_number": "12345",
-  "block_hash": "0xabcdef1234567890",
-  "timestamp": "2023-12-01T10:00:00Z",
-  "gas_used": "21000",
-  "gas_price": "20000000000",
-  "network": "mainnet"
-}
-```
-
-#### Consuming Events
-
-Downstream applications can consume transaction events from NATS:
-
-```go
-// Example consumer
-nc, _ := nats.Connect("nats://localhost:4222")
-js, _ := nc.JetStream()
-
-// Subscribe to transaction events
-sub, _ := js.Subscribe("transactions.events", func(msg *nats.Msg) {
-    var txEvent TransactionEvent
-    json.Unmarshal(msg.Data, &txEvent)
-
-    // Process transaction event
-    processTransaction(txEvent)
-
-    // Acknowledge message
-    msg.Ack()
-})
-```
-
-#### Benefits
-
-- **Real-time Processing**: Events are published immediately as transactions are processed
-- **Decoupling**: Downstream services don't need direct database access
-- **Reliability**: JetStream provides message persistence and delivery guarantees
-- **Scalability**: Multiple consumers can process events independently
-- **Fault Tolerance**: Built-in retry and error handling
-
-### Monitoring
-
-- **Logs**: Structured JSON logs with configurable levels
-- **Metrics**: Real-time performance metrics stored in MongoDB
-- **Health Checks**: Periodic system health validation
-
-### Data Access
-
-Access the raw data through MongoDB collections:
-
-```javascript
-// Get latest blocks
-db.blocks.find().sort({number: -1}).limit(10)
-
-// Get transactions for a specific address
-db.transactions.find({
-  $or: [
-    {from: "0x742d35Cc6e56A0e24C1D887FC9b50f08a2B6F4bC"},
-    {to: "0x742d35Cc6e56A0e24C1D887FC9b50f08a2B6F4bC"}
-  ]
-}).sort({block_number: -1})
-
-// Get system metrics
-db.crawler_metrics.find().sort({timestamp: -1}).limit(1)
-```
-
-## Performance Optimization
-
-### Concurrent Processing
-- Configurable worker pools for parallel block processing
-- Batch operations for database writes
-- Connection pooling for MongoDB
-
-### Resource Management
-- Memory usage monitoring
-- Graceful shutdown handling
-- Error recovery with exponential backoff
-
-### Monitoring
-- Real-time performance metrics
-- Health check endpoints
-- Comprehensive logging
-
-## Extending for Other Blockchains
-
-The architecture is designed for multi-blockchain support:
-
-1. **Create new blockchain service**:
-```go
-// internal/infrastructure/blockchain/polygon_service.go
-type PolygonService struct {
-    // Implementation for Polygon
-}
-```
-
-2. **Add configuration**:
-```go
-// internal/infrastructure/config/config.go
-type PolygonConfig struct {
-    RPCURL string
-    // Polygon-specific config
-}
-```
-
-3. **Register in DI container**:
-```go
-// cmd/crawler/main.go
-fx.Provide(
-    fx.Annotate(
-        blockchain.NewPolygonService,
-        fx.As(new(service.BlockchainService)),
-    ),
-)
-```
-
-## Development
-
-### Building
-```bash
-go build -o bin/crawler cmd/crawler/main.go
+# Development workflow
+make dev
 ```
 
 ### Testing
+
 ```bash
-go test ./...
+# Run all tests
+make test
+
+# Run specific test
+go test ./internal/application/service -v
+
+# Test with coverage
+go test -cover ./...
 ```
 
-### Linting
-```bash
-golangci-lint run
-```
+## 🐳 Docker Deployment
 
-## Production Deployment
-
-### Docker Compose
-
-The project includes a complete Docker Compose setup with all required services:
+### Docker Compose (Recommended)
 
 ```bash
-# Start all services (MongoDB, NATS, Crawler)
-docker-compose up -d
+# Start all services
+make scheduler-up
 
 # View logs
-docker-compose logs -f ethereum-crawler
+make scheduler-logs
 
-# Stop all services
-docker-compose down
+# Stop services
+make scheduler-down
 ```
 
-The Docker Compose setup includes:
-- **MongoDB**: Database for storing blockchain data
-- **NATS JetStream**: Message streaming for real-time events
-- **Ethereum Crawler**: Main application
-- **Prometheus**: Metrics collection (optional)
+### Manual Docker
 
-### Docker
-```dockerfile
-FROM golang:1.21-alpine AS builder
-WORKDIR /app
-COPY . .
-RUN go build -o crawler cmd/crawler/main.go
+```bash
+# Build image
+make docker-build
 
-FROM alpine:latest
-RUN apk --no-cache add ca-certificates
-WORKDIR /root/
-COPY --from=builder /app/crawler .
-CMD ["./crawler"]
+# Run container
+docker run -d \
+  --name ethereum-scheduler \
+  -e ETHEREUM_RPC_URL=your_rpc_url \
+  -e MONGO_URI=your_mongo_uri \
+  ethereum-scheduler:latest
 ```
 
-### Kubernetes
-See `deployments/k8s/` for Kubernetes manifests.
+## 🔧 Configuration Reference
 
-## Best Practices
+### Scheduler Modes
 
-### Data Organization
-- **Immutable Storage**: Raw data is never modified
-- **Comprehensive Indexing**: Optimized for query patterns
-- **Time-series Structure**: Efficient for temporal analysis
-- **Network Separation**: Isolated by blockchain network
+| Mode | Description | Use Case |
+|------|-------------|----------|
+| `realtime` | WebSocket only | Real-time applications |
+| `polling` | RPC polling only | Rate-limited APIs |
+| `hybrid` | WebSocket + fallback | Production (recommended) |
 
-### Monitoring
-- **Metrics Collection**: Performance and operational metrics
-- **Health Checks**: System component validation
-- **Alerting**: Critical error notifications
-- **Log Aggregation**: Centralized logging
+### Performance Tuning
 
-### Error Handling
-- **Graceful Degradation**: Continue processing on non-critical errors
-- **Retry Logic**: Exponential backoff for transient failures
-- **Circuit Breaker**: Protect against cascading failures
-- **Dead Letter Queue**: Handle permanently failed items
+For high-throughput scenarios:
 
-## Contributing
+```bash
+# Increase worker concurrency
+CONCURRENT_WORKERS=5
+
+# Adjust batch sizes
+BATCH_SIZE=10
+
+# Optimize MongoDB connection
+MONGO_MAX_POOL_SIZE=20
+```
+
+For rate-limited APIs:
+
+```bash
+# Conservative settings
+ETHEREUM_RATE_LIMIT=2s
+ETHEREUM_SKIP_RECEIPTS=true
+CONCURRENT_WORKERS=1
+BATCH_SIZE=1
+```
+
+## 📝 Logging
+
+Logs are structured JSON format with different levels:
+
+```bash
+# Set log level
+LOG_LEVEL=debug  # debug, info, warn, error
+
+# View logs in real-time
+make scheduler-logs
+
+# Filter logs
+docker logs ethereum-scheduler-app | grep "level\":\"error\""
+```
+
+## 🆘 Troubleshooting
+
+### Common Issues
+
+1. **WebSocket Connection Fails**
+   ```bash
+   # Check WebSocket URL
+   curl -H "Upgrade: websocket" $ETHEREUM_WS_URL
+
+   # Fallback to polling mode
+   export SCHEDULER_MODE=polling
+   ```
+
+2. **MongoDB Connection Issues**
+   ```bash
+   # Test MongoDB connection
+   mongosh $MONGO_URI
+
+   # Check container health
+   docker exec ethereum-scheduler-mongodb mongosh --eval "db.adminCommand('ping')"
+   ```
+
+3. **Rate Limiting**
+   ```bash
+   # Increase delay between requests
+   export ETHEREUM_RATE_LIMIT=5s
+
+   # Skip transaction receipts
+   export ETHEREUM_SKIP_RECEIPTS=true
+   ```
+
+### Debug Mode
+
+Enable debug logging for detailed troubleshooting:
+
+```bash
+export LOG_LEVEL=debug
+./scripts/run-scheduler.sh dev
+```
+
+## 🤝 Contributing
 
 1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests
-5. Submit a pull request
+2. Create a feature branch: `git checkout -b feature/amazing-feature`
+3. Make your changes and add tests
+4. Run the test suite: `make test`
+5. Format code: `make fmt`
+6. Submit a pull request
 
-## License
+## 📄 License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## Support
+## 🔗 Links
 
-For support and questions:
-- Create an issue on GitHub
-- Check the documentation in `/docs`
-- Review the example configurations
+- [Docker Hub](https://hub.docker.com/)
+- [Ethereum Documentation](https://ethereum.org/developers/)
+- [MongoDB Documentation](https://docs.mongodb.com/)
+- [Go Documentation](https://golang.org/doc/)
+
+---
+
+**Made with ❤️ for the Ethereum community**
