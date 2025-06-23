@@ -50,11 +50,16 @@ services:
       APP_ENV: production
       LOG_LEVEL: info
 
-      # Crawler Configuration - Optimized for real-time processing
+      # Crawler Configuration - Optimized for Infura free tier
       BATCH_SIZE: 1
-      CONCURRENT_WORKERS: 5
+      CONCURRENT_WORKERS: 2
       RETRY_ATTEMPTS: 3
-      RETRY_DELAY: 2s
+      RETRY_DELAY: 3s
+
+      # Rate limiting for Infura API
+      ETHEREUM_RATE_LIMIT: ${ETHEREUM_RATE_LIMIT:-1s}
+      ETHEREUM_REQUEST_TIMEOUT: ${ETHEREUM_REQUEST_TIMEOUT:-120s}
+      ETHEREUM_SKIP_RECEIPTS: ${ETHEREUM_SKIP_RECEIPTS:-true}
 
       # Scheduler Configuration - Real-time mode
       SCHEDULER_MODE: ${SCHEDULER_MODE:-realtime}
