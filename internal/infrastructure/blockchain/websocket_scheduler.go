@@ -345,7 +345,6 @@ func (w *WebSocketScheduler) connectionMonitor(ctx context.Context) {
 			return
 		case <-ctx.Done():
 			w.logger.Info("Connection monitor context cancelled")
-			w.handleReconnection(ctx)
 			return
 		case <-w.reconnectCh:
 			w.logger.Info("Connection monitor handling reconnection request")
