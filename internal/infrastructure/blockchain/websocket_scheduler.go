@@ -256,52 +256,20 @@ func (w *WebSocketScheduler) messageListener(ctx context.Context) {
 				continue
 			}
 
-			// Check if connection is still valid before reading
-			if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
-				w.logger.Debug("Connection ping failed, connection is dead", zap.Error(err))
-				// Clear the connection and trigger reconnection
-				w.mu.Lock()
-				w.conn = nil
-				w.mu.Unlock()
-
-				select {
-				case w.reconnectCh <- struct{}{}:
-					w.logger.Info("Triggered reconnection due to dead connection")
-				default:
-				}
-				continue
-			}
-
 			// Set read deadline to prevent hanging
 			conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 
 			var message map[string]interface{}
-
-			// Use anonymous function to catch panics during ReadJSON
-			readErr := func() (err error) {
-				defer func() {
-					if r := recover(); r != nil {
-						err = fmt.Errorf("panic during ReadJSON: %v", r)
-					}
-				}()
-				return conn.ReadJSON(&message)
-			}()
-
-			if readErr != nil {
+			if err := conn.ReadJSON(&message); err != nil {
 				// Check if it's a normal close or timeout
-				if websocket.IsCloseError(readErr, websocket.CloseGoingAway, websocket.CloseAbnormalClosure, websocket.CloseNormalClosure) {
-					w.logger.Warn("WebSocket connection closed", zap.Error(readErr))
-				} else if netErr, ok := readErr.(interface{ Timeout() bool }); ok && netErr.Timeout() {
+				if websocket.IsCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure, websocket.CloseNormalClosure) {
+					w.logger.Warn("WebSocket connection closed", zap.Error(err))
+				} else if netErr, ok := err.(interface{ Timeout() bool }); ok && netErr.Timeout() {
 					w.logger.Debug("WebSocket read timeout, continuing...")
 					continue
 				} else {
-					w.logger.Error("Failed to read WebSocket message", zap.Error(readErr))
+					w.logger.Error("Failed to read WebSocket message", zap.Error(err))
 				}
-
-				// Clear connection state and trigger reconnection
-				w.mu.Lock()
-				w.conn = nil
-				w.mu.Unlock()
 
 				// Trigger reconnection for any error (non-blocking)
 				select {
