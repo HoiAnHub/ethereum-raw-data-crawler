@@ -39,12 +39,26 @@ help:
 	@echo ""
 	@echo "$(YELLOW)Docker & Deployment:$(NC)"
 	@echo "  docker-build         Build Docker image"
+	@echo "  docker-build-fresh   Build Docker image (no cache)"
+	@echo "  docker-clean-build   Clean and rebuild Docker image"
 	@echo "  scheduler-up         Start scheduler with Docker Compose"
+	@echo "  scheduler-up-fresh   Force rebuild and start (latest code)"
 	@echo "  scheduler-down       Stop scheduler services"
 	@echo "  scheduler-logs       View scheduler logs"
 	@echo "  scheduler-status     Show service status"
+	@echo "  deploy-production    Deploy to production (fresh build)"
 	@echo ""
-	@echo "$(YELLOW)Using run-scheduler.sh script:$(NC)"
+	@echo "$(YELLOW)Environment & Debugging:$(NC)"
+	@echo "  env-check            Check .env file exists"
+	@echo "  env-check-container  Check container environment variables"
+	@echo "  env-check-full       Full environment check with tests"
+	@echo ""
+	@echo "$(YELLOW)🔥 Recommended deployment scripts:$(NC)"
+	@echo "  ./scripts/deploy.sh fresh            # Force fresh build (latest code)"
+	@echo "  ./scripts/deploy.sh prod             # Production deployment"
+	@echo "  ./scripts/deploy.sh clean            # Clean build"
+	@echo ""
+	@echo "$(YELLOW)Legacy run-scheduler.sh script:$(NC)"
 	@echo "  ./scripts/run-scheduler.sh dev       # Run in development mode"
 	@echo "  ./scripts/run-scheduler.sh docker    # Run with Docker"
 	@echo "  ./scripts/run-scheduler.sh build     # Build binary"
@@ -126,11 +140,35 @@ docker-build:
 	@docker build -f Dockerfile.scheduler -t ethereum-scheduler:$(DOCKER_TAG) .
 	@echo "$(GREEN)✓ Docker image built$(NC)"
 
+## Build Docker image with no cache (force fresh build)
+docker-build-fresh:
+	@echo "$(BLUE)Building Docker image (no cache)...$(NC)"
+	@docker-compose -f docker-compose.scheduler.yml build --no-cache
+	@echo "$(GREEN)✓ Fresh Docker image built$(NC)"
+
+## Clean Docker images and rebuild
+docker-clean-build:
+	@echo "$(BLUE)Cleaning Docker images and rebuilding...$(NC)"
+	@docker-compose -f docker-compose.scheduler.yml down || true
+	@docker rmi ethereum-raw-data-crawler-ethereum-scheduler:latest || true
+	@docker system prune -f || true
+	@docker-compose -f docker-compose.scheduler.yml build --no-cache
+	@echo "$(GREEN)✓ Clean Docker build completed$(NC)"
+
 ## Start scheduler with Docker Compose
 scheduler-up:
 	@echo "$(BLUE)Starting scheduler services...$(NC)"
 	@docker-compose -f docker-compose.scheduler.yml up -d
 	@echo "$(GREEN)✓ Scheduler services started$(NC)"
+	@echo "$(YELLOW)Use 'make scheduler-logs' to view logs$(NC)"
+
+## Force rebuild and start scheduler (ensures latest code)
+scheduler-up-fresh:
+	@echo "$(BLUE)Force rebuilding and starting scheduler services...$(NC)"
+	@docker-compose -f docker-compose.scheduler.yml down || true
+	@docker-compose -f docker-compose.scheduler.yml build --no-cache
+	@docker-compose -f docker-compose.scheduler.yml up -d
+	@echo "$(GREEN)✓ Scheduler services started with fresh build$(NC)"
 	@echo "$(YELLOW)Use 'make scheduler-logs' to view logs$(NC)"
 
 ## Stop scheduler services
@@ -155,6 +193,37 @@ env-check:
 	@echo "$(BLUE)Checking environment...$(NC)"
 	@test -f .env || { echo "$(YELLOW)⚠ .env file not found. Copy from env.example$(NC)"; }
 	@echo "$(GREEN)✓ Environment check completed$(NC)"
+
+## Check environment variables in running container
+env-check-container:
+	@echo "$(BLUE)Checking container environment variables...$(NC)"
+	@if [ -f scripts/quick-env-check.sh ]; then \
+		chmod +x scripts/quick-env-check.sh; \
+		./scripts/quick-env-check.sh; \
+	else \
+		echo "$(YELLOW)scripts/quick-env-check.sh not found$(NC)"; \
+	fi
+
+## Comprehensive environment check with connection tests
+env-check-full:
+	@echo "$(BLUE)Running comprehensive environment check...$(NC)"
+	@if [ -f scripts/check-env-vars.sh ]; then \
+		chmod +x scripts/check-env-vars.sh; \
+		./scripts/check-env-vars.sh; \
+	else \
+		echo "$(YELLOW)scripts/check-env-vars.sh not found$(NC)"; \
+	fi
+
+## Deploy to production (force fresh build)
+deploy-production:
+	@echo "$(BLUE)Deploying to production...$(NC)"
+	@echo "$(YELLOW)This will rebuild everything from scratch$(NC)"
+	@docker-compose -f docker-compose.scheduler.yml down || true
+	@docker system prune -f || true
+	@docker-compose -f docker-compose.scheduler.yml --env-file .env.scheduler.production build --no-cache
+	@docker-compose -f docker-compose.scheduler.yml --env-file .env.scheduler.production up -d
+	@echo "$(GREEN)✓ Production deployment completed$(NC)"
+	@echo "$(YELLOW)Run 'make env-check-container' to verify deployment$(NC)"
 
 ## Development workflow
 dev: deps fmt vet test build

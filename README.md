@@ -51,7 +51,31 @@ A robust Ethereum block scheduler service that efficiently monitors and processe
 
 ## 📋 Usage
 
-### Using run-scheduler.sh Script
+### 🔥 Using Deploy Script (Recommended)
+
+The `./scripts/deploy.sh` script ensures latest code is always used:
+
+```bash
+# Development with fresh build (RECOMMENDED FOR CODE CHANGES)
+./scripts/deploy.sh fresh
+
+# Production deployment
+./scripts/deploy.sh prod
+
+# Clean everything and rebuild (if Docker cache issues)
+./scripts/deploy.sh clean
+
+# Check status and environment variables
+./scripts/deploy.sh check
+
+# Show logs
+./scripts/deploy.sh logs
+
+# Stop all services
+./scripts/deploy.sh stop
+```
+
+### Using run-scheduler.sh Script (Legacy)
 
 The `./scripts/run-scheduler.sh` script provides a convenient interface:
 
@@ -93,6 +117,9 @@ make run
 # Start with Docker Compose
 make scheduler-up
 
+# 🔥 IMPORTANT: Force rebuild with latest code
+make scheduler-up-fresh
+
 # View logs
 make scheduler-logs
 
@@ -101,6 +128,9 @@ make scheduler-down
 
 # Check status
 make scheduler-status
+
+# Check environment variables in container
+make env-check-container
 
 # Run tests
 make test
@@ -236,11 +266,45 @@ go test -cover ./...
 # Start all services
 make scheduler-up
 
+# 🔥 Force rebuild with latest code (recommended for development)
+make scheduler-up-fresh
+
+# Clean build (if Docker cache issues)
+make docker-clean-build
+make scheduler-up
+
 # View logs
 make scheduler-logs
 
 # Stop services
 make scheduler-down
+```
+
+### ⚠️ Ensuring Latest Code
+
+When you make code changes, Docker may use cached layers. Always use:
+
+```bash
+# For development - forces fresh build
+make scheduler-up-fresh
+
+# For production deployment
+make deploy-production
+
+# If having Docker cache issues
+make docker-clean-build && make scheduler-up
+```
+
+### 🔍 Environment Verification
+
+After deployment, verify your environment:
+
+```bash
+# Quick check of critical variables
+make env-check-container
+
+# Comprehensive check with connection tests
+make env-check-full
 ```
 
 ### Manual Docker
