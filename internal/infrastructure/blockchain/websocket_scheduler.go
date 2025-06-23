@@ -196,6 +196,29 @@ func (w *WebSocketScheduler) messageListener(ctx context.Context) {
 			w.logger.Error("Message listener panic recovered", zap.Any("panic", r))
 		}
 		w.logger.Info("Message listener stopped")
+
+		// Auto-restart message listener if scheduler is still running
+		w.mu.RLock()
+		running := w.isRunning
+		w.mu.RUnlock()
+
+		if running {
+			w.logger.Info("Scheduler still running, attempting to restart message listener")
+			// Wait a bit before restarting to avoid tight restart loops
+			time.Sleep(2 * time.Second)
+
+			select {
+			case <-w.stopChan:
+				w.logger.Info("Stop signal received during restart attempt")
+				return
+			case <-ctx.Done():
+				w.logger.Info("Context cancelled during restart attempt")
+				return
+			default:
+				w.logger.Info("Restarting message listener")
+				go w.messageListener(ctx)
+			}
+		}
 	}()
 
 	w.logger.Info("Message listener started")
@@ -438,9 +461,8 @@ func (w *WebSocketScheduler) handleReconnection(ctx context.Context) {
 				continue
 			}
 
-			// Restart message listener
-			w.logger.Info("Restarting message listener after reconnection")
-			go w.messageListener(ctx)
+			// Note: Message listener will be automatically restarted by its own defer logic
+			w.logger.Info("WebSocket reconnection completed, message listener will restart automatically")
 		}
 
 		w.logger.Info("Successfully reconnected WebSocket", zap.Int("attempt", attempt))
