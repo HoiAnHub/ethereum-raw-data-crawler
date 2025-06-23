@@ -53,6 +53,10 @@ type CrawlerConfig struct {
 	ConcurrentWorkers int           `mapstructure:"concurrent_workers"`
 	RetryAttempts     int           `mapstructure:"retry_attempts"`
 	RetryDelay        time.Duration `mapstructure:"retry_delay"`
+
+	// Batch upsert configuration
+	UseUpsert      bool `mapstructure:"use_upsert"`      // Enable batch upsert instead of insert
+	UpsertFallback bool `mapstructure:"upsert_fallback"` // Fallback to insert if upsert fails
 }
 
 // SchedulerConfig represents scheduler configuration
@@ -155,6 +159,8 @@ func setDefaults() {
 	viper.SetDefault("crawler.concurrent_workers", 10)
 	viper.SetDefault("crawler.retry_attempts", 3)
 	viper.SetDefault("crawler.retry_delay", "5s")
+	viper.SetDefault("crawler.use_upsert", true)
+	viper.SetDefault("crawler.upsert_fallback", true)
 
 	// Scheduler defaults
 	viper.SetDefault("scheduler.mode", "hybrid")
@@ -199,6 +205,8 @@ func bindEnvVars() {
 	viper.BindEnv("crawler.concurrent_workers", "CONCURRENT_WORKERS")
 	viper.BindEnv("crawler.retry_attempts", "RETRY_ATTEMPTS")
 	viper.BindEnv("crawler.retry_delay", "RETRY_DELAY")
+	viper.BindEnv("crawler.use_upsert", "CRAWLER_USE_UPSERT")
+	viper.BindEnv("crawler.upsert_fallback", "CRAWLER_UPSERT_FALLBACK")
 
 	// Scheduler
 	viper.BindEnv("scheduler.mode", "SCHEDULER_MODE")

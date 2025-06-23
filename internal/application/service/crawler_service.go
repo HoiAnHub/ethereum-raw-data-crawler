@@ -417,11 +417,10 @@ func (s *CrawlerService) processBlock(ctx context.Context, blockNumber *big.Int)
 
 	// Save transactions to database
 	if len(transactions) > 0 {
-		if err := s.txRepo.CreateTransactions(blockCtx, transactions); err != nil {
-			logger.Error("Failed to save transactions", zap.Error(err))
+		if err := s.saveTransactions(blockCtx, transactions, logger); err != nil {
 			return fmt.Errorf("failed to save transactions for block %s: %w", blockNumber.String(), err)
 		}
-		logger.Info("Transactions saved to database")
+		logger.Info("Transactions saved to database", zap.Int("count", len(transactions)))
 	}
 
 	// Mark block as processed
@@ -436,6 +435,73 @@ func (s *CrawlerService) processBlock(ctx context.Context, blockNumber *big.Int)
 		zap.Int("transaction_count", len(transactions)))
 
 	return nil
+}
+
+// saveTransactions saves transactions using configured method (upsert or insert)
+func (s *CrawlerService) saveTransactions(ctx context.Context, transactions []*entity.Transaction, logger *logger.Logger) error {
+	start := time.Now()
+	txCount := len(transactions)
+
+	if s.config.Crawler.UseUpsert {
+		// Try upsert first
+		logger.Debug("Attempting batch upsert", zap.Int("transaction_count", txCount))
+
+		if err := s.txRepo.UpsertTransactions(ctx, transactions); err != nil {
+			duration := time.Since(start)
+			logger.Warn("Batch upsert failed",
+				zap.Error(err),
+				zap.Int("transaction_count", txCount),
+				zap.Duration("duration", duration))
+
+			// Fallback to insert if configured
+			if s.config.Crawler.UpsertFallback {
+				logger.Info("Falling back to batch insert", zap.Int("transaction_count", txCount))
+				fallbackStart := time.Now()
+
+				if insertErr := s.txRepo.CreateTransactions(ctx, transactions); insertErr != nil {
+					fallbackDuration := time.Since(fallbackStart)
+					logger.Error("Fallback batch insert also failed",
+						zap.Error(insertErr),
+						zap.Int("transaction_count", txCount),
+						zap.Duration("fallback_duration", fallbackDuration),
+						zap.Duration("total_duration", time.Since(start)))
+					return fmt.Errorf("both upsert and insert failed: upsert=%w, insert=%w", err, insertErr)
+				}
+
+				fallbackDuration := time.Since(fallbackStart)
+				logger.Info("Fallback batch insert succeeded",
+					zap.Int("transaction_count", txCount),
+					zap.Duration("fallback_duration", fallbackDuration),
+					zap.Duration("total_duration", time.Since(start)))
+				return nil
+			}
+			return err
+		}
+
+		duration := time.Since(start)
+		logger.Debug("Batch upsert succeeded",
+			zap.Int("transaction_count", txCount),
+			zap.Duration("duration", duration))
+		return nil
+	} else {
+		// Use traditional insert
+		logger.Debug("Attempting batch insert", zap.Int("transaction_count", txCount))
+
+		if err := s.txRepo.CreateTransactions(ctx, transactions); err != nil {
+			duration := time.Since(start)
+			logger.Error("Batch insert failed",
+				zap.Error(err),
+				zap.Int("transaction_count", txCount),
+				zap.Duration("duration", duration))
+			return err
+		}
+
+		duration := time.Since(start)
+		logger.Debug("Batch insert succeeded",
+			zap.Int("transaction_count", txCount),
+			zap.Duration("duration", duration))
+		return nil
+	}
 }
 
 // metricsWorker periodically saves metrics to database

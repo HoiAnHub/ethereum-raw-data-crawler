@@ -11,6 +11,7 @@ type TransactionRepository interface {
 	// Create operations
 	CreateTransaction(ctx context.Context, tx *entity.Transaction) error
 	CreateTransactions(ctx context.Context, txs []*entity.Transaction) error
+	UpsertTransactions(ctx context.Context, txs []*entity.Transaction) error
 
 	// Read operations
 	GetTransactionByHash(ctx context.Context, hash string) (*entity.Transaction, error)

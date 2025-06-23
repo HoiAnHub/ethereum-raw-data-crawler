@@ -51,6 +51,43 @@ func (r *TransactionRepositoryImpl) CreateTransactions(ctx context.Context, txs 
 	return err
 }
 
+// UpsertTransactions upserts multiple transactions using bulk operations
+func (r *TransactionRepositoryImpl) UpsertTransactions(ctx context.Context, txs []*entity.Transaction) error {
+	if len(txs) == 0 {
+		return nil
+	}
+
+	// Create bulk write operations
+	var operations []mongo.WriteModel
+
+	for _, tx := range txs {
+		// Set ID if not already set
+		if tx.ID.IsZero() {
+			tx.ID = primitive.NewObjectID()
+		}
+
+		// Create filter based on transaction hash (unique identifier)
+		filter := bson.M{"hash": tx.Hash}
+
+		// Create update document
+		update := bson.M{"$set": tx}
+
+		// Create upsert operation
+		upsertOp := mongo.NewUpdateOneModel()
+		upsertOp.SetFilter(filter)
+		upsertOp.SetUpdate(update)
+		upsertOp.SetUpsert(true)
+
+		operations = append(operations, upsertOp)
+	}
+
+	// Execute bulk write
+	opts := options.BulkWrite().SetOrdered(false) // Allow parallel execution
+	_, err := r.collection.BulkWrite(ctx, operations, opts)
+
+	return err
+}
+
 // GetTransactionByHash gets transaction by hash
 func (r *TransactionRepositoryImpl) GetTransactionByHash(ctx context.Context, hash string) (*entity.Transaction, error) {
 	filter := bson.M{"hash": hash}
