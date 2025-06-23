@@ -249,10 +249,34 @@ func (s *CrawlerService) crawlerWorker(ctx context.Context) {
 
 // processNextBlocks processes the next batch of blocks
 func (s *CrawlerService) processNextBlocks(ctx context.Context) error {
+	// Add panic recovery
+	defer func() {
+		if r := recover(); r != nil {
+			s.logger.Error("Panic recovered in processNextBlocks",
+				zap.Any("panic", r),
+				zap.Stack("stack"))
+		}
+	}()
+
+	// Validate dependencies
+	if s.blockchainService == nil {
+		return fmt.Errorf("blockchainService is nil")
+	}
+	if s.currentBlock == nil {
+		return fmt.Errorf("currentBlock is nil")
+	}
+	if s.config == nil {
+		return fmt.Errorf("config is nil")
+	}
+
 	// Get latest block from blockchain
 	latestBlock, err := s.blockchainService.GetLatestBlockNumber(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get latest block: %w", err)
+	}
+
+	if latestBlock == nil {
+		return fmt.Errorf("received nil latest block")
 	}
 
 	s.logger.Debug("Checking blocks for processing",
@@ -347,8 +371,27 @@ func (s *CrawlerService) processBlockRange(ctx context.Context, startBlock, endB
 
 // ProcessSpecificBlock processes a specific block (used by scheduler)
 func (s *CrawlerService) ProcessSpecificBlock(ctx context.Context, blockNumber *big.Int) error {
+	// Add panic recovery
+	defer func() {
+		if r := recover(); r != nil {
+			s.logger.Error("Panic recovered in ProcessSpecificBlock",
+				zap.Any("panic", r),
+				zap.Stack("stack"))
+		}
+	}()
+
+	// Validate inputs
+	if blockNumber == nil {
+		return fmt.Errorf("blockNumber is nil")
+	}
+
 	if !s.IsRunning() {
 		return fmt.Errorf("crawler service is not running")
+	}
+
+	// Validate dependencies
+	if s.workerPool == nil {
+		return fmt.Errorf("workerPool is nil")
 	}
 
 	s.logger.Info("Processing specific block from scheduler",
@@ -439,6 +482,7 @@ func (s *CrawlerService) processBlock(ctx context.Context, blockNumber *big.Int)
 	s.updateProcessingMetrics(block, transactions)
 
 	logger.Info("Block processed successfully",
+		zap.String("block_number", block.Number),
 		zap.Int("transaction_count", len(transactions)))
 
 	return nil

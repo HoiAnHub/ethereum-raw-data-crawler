@@ -57,6 +57,17 @@ func NewSchedulerService(
 	config *config.Config,
 	logger *logger.Logger,
 ) *SchedulerService {
+	// Validate required dependencies
+	if crawlerService == nil {
+		panic("crawlerService cannot be nil")
+	}
+	if config == nil {
+		panic("config cannot be nil")
+	}
+	if logger == nil {
+		panic("logger cannot be nil")
+	}
+
 	// Determine mode from config
 	var mode SchedulerMode
 	switch config.Scheduler.Mode {
@@ -70,8 +81,19 @@ func NewSchedulerService(
 		mode = HybridMode // Default fallback
 	}
 
+	// Get max retries and skip duration from config with defaults
+	maxRetries := 3
+	skipDuration := time.Minute
+
+	if config.Scheduler.MaxRetries > 0 {
+		maxRetries = config.Scheduler.MaxRetries
+	}
+	if config.Scheduler.SkipDuration > 0 {
+		skipDuration = config.Scheduler.SkipDuration
+	}
+
 	return &SchedulerService{
-		blockScheduler:  blockScheduler,
+		blockScheduler:  blockScheduler, // Can be nil for polling-only mode
 		crawlerService:  crawlerService,
 		config:          config,
 		logger:          logger.WithComponent("scheduler-service"),
@@ -81,8 +103,8 @@ func NewSchedulerService(
 		fallbackTimeout: config.Scheduler.FallbackTimeout,
 		failedBlocks:    make(map[string]int),
 		skippedBlocks:   make(map[string]time.Time),
-		maxRetries:      3,           // Default max retries
-		skipDuration:    time.Minute, // Default skip duration
+		maxRetries:      maxRetries,
+		skipDuration:    skipDuration,
 	}
 }
 
@@ -191,9 +213,25 @@ func (s *SchedulerService) startRealtimeMode(ctx context.Context) error {
 
 // startPollingMode starts the scheduler in polling mode
 func (s *SchedulerService) startPollingMode(ctx context.Context) error {
+	// Validate dependencies
+	if s.config == nil {
+		return fmt.Errorf("config is nil")
+	}
+	if s.crawlerService == nil {
+		return fmt.Errorf("crawlerService is nil")
+	}
+	if s.config.Scheduler.PollingInterval <= 0 {
+		return fmt.Errorf("invalid polling interval: %v", s.config.Scheduler.PollingInterval)
+	}
+
 	// Use configured polling interval
 	s.pollingTicker = time.NewTicker(s.config.Scheduler.PollingInterval)
 	s.pollingStopChan = make(chan struct{})
+
+	// Validate before starting worker
+	if s.pollingTicker == nil || s.pollingStopChan == nil {
+		return fmt.Errorf("failed to create polling resources")
+	}
 
 	go s.pollingWorker(ctx, s.pollingTicker, s.pollingStopChan)
 
@@ -226,6 +264,21 @@ func (s *SchedulerService) startHybridMode(ctx context.Context) error {
 
 // handleNewBlock handles new block notifications from WebSocket
 func (s *SchedulerService) handleNewBlock(blockNumber *big.Int) {
+	// Add panic recovery
+	defer func() {
+		if r := recover(); r != nil {
+			s.logger.Error("Panic recovered in handleNewBlock",
+				zap.Any("panic", r),
+				zap.Stack("stack"))
+		}
+	}()
+
+	// Validate input
+	if blockNumber == nil {
+		s.logger.Error("handleNewBlock called with nil blockNumber")
+		return
+	}
+
 	blockNumStr := blockNumber.String()
 	s.logger.Info("Received new block notification",
 		zap.String("block_number", blockNumStr))
@@ -250,7 +303,12 @@ func (s *SchedulerService) handleNewBlock(blockNumber *big.Int) {
 	}
 	s.mu.Unlock()
 
-	// Trigger crawler to process the new block
+	// Trigger crawler to process the new block with nil check
+	if s.crawlerService == nil {
+		s.logger.Error("crawlerService is nil in handleNewBlock")
+		return
+	}
+
 	ctx := context.Background()
 	if err := s.crawlerService.ProcessSpecificBlock(ctx, blockNumber); err != nil {
 		s.handleBlockProcessingError(blockNumStr, err)
@@ -300,12 +358,35 @@ func (s *SchedulerService) handleBlockProcessingError(blockNumStr string, err er
 
 // pollingWorker runs the polling loop
 func (s *SchedulerService) pollingWorker(ctx context.Context, ticker *time.Ticker, stopChan chan struct{}) {
+	// Add panic recovery
 	defer func() {
+		if r := recover(); r != nil {
+			s.logger.Error("Panic recovered in pollingWorker",
+				zap.Any("panic", r),
+				zap.Stack("stack"))
+		}
+
 		if ticker != nil {
 			ticker.Stop()
 		}
 		s.logger.Info("Polling worker stopped")
 	}()
+
+	// Validate inputs
+	if ticker == nil {
+		s.logger.Error("pollingWorker called with nil ticker")
+		return
+	}
+
+	if stopChan == nil {
+		s.logger.Error("pollingWorker called with nil stopChan")
+		return
+	}
+
+	if s.crawlerService == nil {
+		s.logger.Error("pollingWorker called with nil crawlerService")
+		return
+	}
 
 	s.logger.Info("Polling worker started")
 
@@ -322,14 +403,21 @@ func (s *SchedulerService) pollingWorker(ctx context.Context, ticker *time.Ticke
 			return
 		case <-ticker.C:
 			s.logger.Debug("Polling worker tick - checking for new blocks")
-			if err := s.crawlerService.processNextBlocks(ctx); err != nil {
-				s.logger.Error("Error in polling worker", zap.Error(err))
+
+			// Add nil check before calling crawlerService
+			if s.crawlerService != nil {
+				if err := s.crawlerService.processNextBlocks(ctx); err != nil {
+					s.logger.Error("Error in polling worker", zap.Error(err))
+				} else {
+					// Update last block time on successful processing
+					s.mu.Lock()
+					s.lastBlockTime = time.Now()
+					s.mu.Unlock()
+					s.logger.Debug("Polling worker completed successfully")
+				}
 			} else {
-				// Update last block time on successful processing
-				s.mu.Lock()
-				s.lastBlockTime = time.Now()
-				s.mu.Unlock()
-				s.logger.Debug("Polling worker completed successfully")
+				s.logger.Error("crawlerService is nil in polling worker")
+				return
 			}
 		}
 	}
@@ -337,6 +425,15 @@ func (s *SchedulerService) pollingWorker(ctx context.Context, ticker *time.Ticke
 
 // fallbackMonitor monitors for WebSocket failures and activates polling fallback
 func (s *SchedulerService) fallbackMonitor(ctx context.Context) {
+	// Add panic recovery
+	defer func() {
+		if r := recover(); r != nil {
+			s.logger.Error("Panic recovered in fallbackMonitor",
+				zap.Any("panic", r),
+				zap.Stack("stack"))
+		}
+	}()
+
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 
@@ -356,7 +453,7 @@ func (s *SchedulerService) fallbackMonitor(ctx context.Context) {
 			pollingActive := s.pollingTicker != nil
 			s.mu.RUnlock()
 
-			// Check if WebSocket is working
+			// Check if WebSocket is working with nil check
 			wsWorking := s.blockScheduler != nil && s.blockScheduler.IsRunning()
 
 			s.logger.Debug("Fallback monitor check",
@@ -371,14 +468,29 @@ func (s *SchedulerService) fallbackMonitor(ctx context.Context) {
 						zap.Duration("time_since_last_block", timeSinceLastBlock),
 						zap.Bool("websocket_running", wsWorking))
 
+					// Create polling with proper validation
 					s.mu.Lock()
-					s.pollingTicker = time.NewTicker(s.config.Scheduler.PollingInterval)
-					ticker := s.pollingTicker // Store reference before unlocking
-					s.mu.Unlock()
+					if s.config != nil && s.config.Scheduler.PollingInterval > 0 {
+						s.pollingTicker = time.NewTicker(s.config.Scheduler.PollingInterval)
+						ticker := s.pollingTicker // Store reference before unlocking
 
-					stopChan := make(chan struct{})
-					s.pollingStopChan = stopChan
-					go s.pollingWorker(ctx, ticker, stopChan)
+						stopChan := make(chan struct{})
+						s.pollingStopChan = stopChan
+						s.mu.Unlock()
+
+						// Start pollingWorker with proper nil checks
+						if ticker != nil && stopChan != nil && s.crawlerService != nil {
+							go s.pollingWorker(ctx, ticker, stopChan)
+						} else {
+							s.logger.Error("Failed to start polling worker: nil dependencies",
+								zap.Bool("ticker_nil", ticker == nil),
+								zap.Bool("stopChan_nil", stopChan == nil),
+								zap.Bool("crawlerService_nil", s.crawlerService == nil))
+						}
+					} else {
+						s.mu.Unlock()
+						s.logger.Error("Invalid polling configuration")
+					}
 				}
 			} else {
 				// If blocks are coming via WebSocket, stop polling
@@ -390,7 +502,13 @@ func (s *SchedulerService) fallbackMonitor(ctx context.Context) {
 						s.pollingTicker = nil
 					}
 					if s.pollingStopChan != nil {
-						close(s.pollingStopChan)
+						// Use safe channel close
+						select {
+						case <-s.pollingStopChan:
+							// Channel already closed
+						default:
+							close(s.pollingStopChan)
+						}
 						s.pollingStopChan = nil
 					}
 					s.mu.Unlock()
