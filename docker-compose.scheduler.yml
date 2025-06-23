@@ -52,7 +52,7 @@ services:
 
       # Crawler Configuration - Optimized for Infura free tier
       BATCH_SIZE: 1
-      CONCURRENT_WORKERS: 2
+      CONCURRENT_WORKERS: 1
       RETRY_ATTEMPTS: 3
       RETRY_DELAY: 3s
 
