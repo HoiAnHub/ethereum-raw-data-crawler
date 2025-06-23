@@ -27,12 +27,13 @@ type CrawlerService struct {
 	logger            *logger.Logger
 
 	// State management
-	isRunning    bool
-	currentBlock *big.Int
-	workerPool   chan struct{}
-	stopChan     chan struct{}
-	wg           sync.WaitGroup
-	mu           sync.RWMutex
+	isRunning            bool
+	currentBlock         *big.Int
+	workerPool           chan struct{}
+	stopChan             chan struct{}
+	wg                   sync.WaitGroup
+	mu                   sync.RWMutex
+	useExternalScheduler bool // Flag to disable internal crawler worker
 
 	// Metrics
 	metrics *CrawlerMetrics
@@ -96,10 +97,20 @@ func (s *CrawlerService) Start(ctx context.Context) error {
 	}
 
 	// Start worker routines
-	s.wg.Add(3)
-	go s.crawlerWorker(ctx)
-	go s.metricsWorker(ctx)
-	go s.healthCheckWorker(ctx)
+	if s.useExternalScheduler {
+		// Only start metrics and health check workers when using external scheduler
+		s.wg.Add(2)
+		go s.metricsWorker(ctx)
+		go s.healthCheckWorker(ctx)
+		s.logger.Info("Crawler started in external scheduler mode")
+	} else {
+		// Start all workers including internal crawler worker
+		s.wg.Add(3)
+		go s.crawlerWorker(ctx)
+		go s.metricsWorker(ctx)
+		go s.healthCheckWorker(ctx)
+		s.logger.Info("Crawler started in internal polling mode")
+	}
 
 	s.logger.Info("Crawler service started successfully",
 		zap.String("current_block", s.currentBlock.String()))
@@ -325,6 +336,31 @@ func (s *CrawlerService) processBlockRange(ctx context.Context, startBlock, endB
 	s.mu.Unlock()
 
 	return nil
+}
+
+// ProcessSpecificBlock processes a specific block (used by scheduler)
+func (s *CrawlerService) ProcessSpecificBlock(ctx context.Context, blockNumber *big.Int) error {
+	if !s.IsRunning() {
+		return fmt.Errorf("crawler service is not running")
+	}
+
+	s.logger.Info("Processing specific block from scheduler",
+		zap.String("block_number", blockNumber.String()))
+
+	// Acquire worker slot
+	s.workerPool <- struct{}{}
+	defer func() {
+		<-s.workerPool // Release worker slot
+	}()
+
+	return s.processBlock(ctx, blockNumber)
+}
+
+// SetExternalSchedulerMode sets whether to use external scheduler
+func (s *CrawlerService) SetExternalSchedulerMode(useExternal bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.useExternalScheduler = useExternal
 }
 
 // processBlock processes a single block

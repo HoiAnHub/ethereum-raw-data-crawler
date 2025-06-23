@@ -1,0 +1,89 @@
+version: '3.8'
+
+services:
+  # MongoDB database
+  mongodb:
+    image: mongo:7.0
+    container_name: ethereum-scheduler-mongodb
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: password
+      MONGO_INITDB_DATABASE: ethereum_raw_data
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+      - ./scripts/mongo-init.js:/docker-entrypoint-initdb.d/mongo-init.js:ro
+    networks:
+      - ethereum-scheduler-network
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Ethereum block scheduler application
+  ethereum-scheduler:
+    build:
+      context: .
+      dockerfile: Dockerfile.scheduler
+    container_name: ethereum-scheduler-app
+    restart: unless-stopped
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    environment:
+      # MongoDB Configuration
+      MONGO_URI: mongodb://admin:password@mongodb:27017/ethereum_raw_data?authSource=admin
+      MONGO_DATABASE: ethereum_raw_data
+
+      # Ethereum Configuration
+      ETHEREUM_RPC_URL: ${ETHEREUM_RPC_URL:-https://mainnet.infura.io/v3/YOUR_PROJECT_ID}
+      ETHEREUM_WS_URL: ${ETHEREUM_WS_URL:-wss://mainnet.infura.io/ws/v3/YOUR_PROJECT_ID}
+      START_BLOCK_NUMBER: ${START_BLOCK_NUMBER:-latest}
+
+      # Application Configuration
+      APP_ENV: production
+      LOG_LEVEL: info
+
+      # Crawler Configuration - Optimized for real-time processing
+      BATCH_SIZE: 1
+      CONCURRENT_WORKERS: 5
+      RETRY_ATTEMPTS: 3
+      RETRY_DELAY: 2s
+
+      # Scheduler Configuration - Real-time mode
+      SCHEDULER_MODE: ${SCHEDULER_MODE:-hybrid}
+      SCHEDULER_ENABLE_REALTIME: ${SCHEDULER_ENABLE_REALTIME:-true}
+      SCHEDULER_ENABLE_POLLING: ${SCHEDULER_ENABLE_POLLING:-true}
+      SCHEDULER_POLLING_INTERVAL: ${SCHEDULER_POLLING_INTERVAL:-3s}
+      SCHEDULER_FALLBACK_TIMEOUT: ${SCHEDULER_FALLBACK_TIMEOUT:-30s}
+      SCHEDULER_RECONNECT_ATTEMPTS: ${SCHEDULER_RECONNECT_ATTEMPTS:-5}
+      SCHEDULER_RECONNECT_DELAY: ${SCHEDULER_RECONNECT_DELAY:-5s}
+
+      # Monitoring Configuration
+      METRICS_ENABLED: true
+      HEALTH_CHECK_INTERVAL: 30s
+    networks:
+      - ethereum-scheduler-network
+    healthcheck:
+      test: ["CMD", "pgrep", "scheduler"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "5"
+
+volumes:
+  mongodb_data:
+    driver: local
+
+networks:
+  ethereum-scheduler-network:
+    driver: bridge

@@ -15,6 +15,7 @@ type Config struct {
 	Ethereum   EthereumConfig   `mapstructure:"ethereum"`
 	MongoDB    MongoDBConfig    `mapstructure:"mongodb"`
 	Crawler    CrawlerConfig    `mapstructure:"crawler"`
+	Scheduler  SchedulerConfig  `mapstructure:"scheduler"`
 	GraphQL    GraphQLConfig    `mapstructure:"graphql"`
 	Monitoring MonitoringConfig `mapstructure:"monitoring"`
 }
@@ -52,6 +53,17 @@ type CrawlerConfig struct {
 	ConcurrentWorkers int           `mapstructure:"concurrent_workers"`
 	RetryAttempts     int           `mapstructure:"retry_attempts"`
 	RetryDelay        time.Duration `mapstructure:"retry_delay"`
+}
+
+// SchedulerConfig represents scheduler configuration
+type SchedulerConfig struct {
+	Mode              string        `mapstructure:"mode"`               // polling, realtime, hybrid
+	EnableRealtime    bool          `mapstructure:"enable_realtime"`    // Enable WebSocket real-time scheduling
+	EnablePolling     bool          `mapstructure:"enable_polling"`     // Enable polling fallback
+	PollingInterval   time.Duration `mapstructure:"polling_interval"`   // Polling interval
+	FallbackTimeout   time.Duration `mapstructure:"fallback_timeout"`   // Time to wait before fallback to polling
+	ReconnectAttempts int           `mapstructure:"reconnect_attempts"` // Max WebSocket reconnection attempts
+	ReconnectDelay    time.Duration `mapstructure:"reconnect_delay"`    // Delay between reconnection attempts
 }
 
 // GraphQLConfig represents GraphQL configuration
@@ -144,6 +156,15 @@ func setDefaults() {
 	viper.SetDefault("crawler.retry_attempts", 3)
 	viper.SetDefault("crawler.retry_delay", "5s")
 
+	// Scheduler defaults
+	viper.SetDefault("scheduler.mode", "hybrid")
+	viper.SetDefault("scheduler.enable_realtime", true)
+	viper.SetDefault("scheduler.enable_polling", true)
+	viper.SetDefault("scheduler.polling_interval", "3s")
+	viper.SetDefault("scheduler.fallback_timeout", "30s")
+	viper.SetDefault("scheduler.reconnect_attempts", 5)
+	viper.SetDefault("scheduler.reconnect_delay", "5s")
+
 	// GraphQL defaults
 	viper.SetDefault("graphql.endpoint", "/graphql")
 	viper.SetDefault("graphql.playground", true)
@@ -178,6 +199,15 @@ func bindEnvVars() {
 	viper.BindEnv("crawler.concurrent_workers", "CONCURRENT_WORKERS")
 	viper.BindEnv("crawler.retry_attempts", "RETRY_ATTEMPTS")
 	viper.BindEnv("crawler.retry_delay", "RETRY_DELAY")
+
+	// Scheduler
+	viper.BindEnv("scheduler.mode", "SCHEDULER_MODE")
+	viper.BindEnv("scheduler.enable_realtime", "SCHEDULER_ENABLE_REALTIME")
+	viper.BindEnv("scheduler.enable_polling", "SCHEDULER_ENABLE_POLLING")
+	viper.BindEnv("scheduler.polling_interval", "SCHEDULER_POLLING_INTERVAL")
+	viper.BindEnv("scheduler.fallback_timeout", "SCHEDULER_FALLBACK_TIMEOUT")
+	viper.BindEnv("scheduler.reconnect_attempts", "SCHEDULER_RECONNECT_ATTEMPTS")
+	viper.BindEnv("scheduler.reconnect_delay", "SCHEDULER_RECONNECT_DELAY")
 
 	// GraphQL
 	viper.BindEnv("graphql.endpoint", "GRAPHQL_ENDPOINT")

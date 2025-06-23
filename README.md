@@ -5,6 +5,8 @@ A high-performance, scalable Ethereum blockchain data crawler built with Go, des
 ## Features
 
 - **High Performance**: Concurrent block processing with configurable worker pools
+- **Real-time Processing**: WebSocket-based scheduler for immediate block processing
+- **Hybrid Scheduling**: Combines real-time WebSocket with polling fallback
 - **Scalable Architecture**: Hexagonal architecture with dependency injection using uber-go/fx
 - **Comprehensive Data Storage**: Stores blocks, transactions, and metadata in MongoDB
 - **Real-time Monitoring**: GraphQL API for system health and metrics monitoring
@@ -18,7 +20,8 @@ A high-performance, scalable Ethereum blockchain data crawler built with Go, des
 ```
 ethereum-raw-data-crawler/
 ├── cmd/
-│   ├── crawler/           # Main crawler application
+│   ├── crawler/           # Main crawler application (batch processing)
+│   ├── schedulers/        # Real-time block scheduler
 │   └── api/               # GraphQL API server
 ├── internal/
 │   ├── adapters/
@@ -148,20 +151,72 @@ docker run -d -p 27017:27017 --name mongodb mongo:5.0
 
 5. **Run the crawler**:
 ```bash
+# For batch processing (historical data)
 go run cmd/crawler/main.go
+
+# For real-time block processing
+go run cmd/schedulers/main.go
 ```
 
 ## Usage
 
-### Running the Crawler
+### Running the Applications
+
+#### 1. Batch Crawler (Historical Data)
+The main crawler processes blocks in batches for historical data:
+
+```bash
+go run cmd/crawler/main.go
+```
 
 The crawler automatically:
 1. Connects to the Ethereum network
 2. Initializes MongoDB indexes
 3. Resumes from the last processed block
-4. Processes blocks concurrently
+4. Processes blocks concurrently in batches
 5. Stores data in MongoDB
 6. Monitors system health
+
+#### 2. Real-time Scheduler (Live Data)
+The scheduler processes new blocks immediately as they are created:
+
+```bash
+# Using the helper script
+./scripts/run-scheduler.sh dev
+
+# Or directly
+go run cmd/schedulers/main.go
+```
+
+The scheduler automatically:
+1. Connects to Ethereum WebSocket
+2. Listens for new block notifications
+3. Processes blocks immediately upon creation
+4. Falls back to polling if WebSocket fails
+5. Provides real-time data processing
+
+### Scheduler Configuration
+
+Configure the scheduler mode in your `.env` file:
+
+```bash
+# Scheduler Configuration
+SCHEDULER_MODE=hybrid                    # polling, realtime, hybrid
+SCHEDULER_ENABLE_REALTIME=true          # Enable WebSocket
+SCHEDULER_ENABLE_POLLING=true           # Enable polling fallback
+SCHEDULER_POLLING_INTERVAL=3s           # Polling interval
+SCHEDULER_FALLBACK_TIMEOUT=30s          # Fallback timeout
+SCHEDULER_RECONNECT_ATTEMPTS=5          # WebSocket reconnection attempts
+SCHEDULER_RECONNECT_DELAY=5s            # Reconnection delay
+
+# Required for real-time mode
+ETHEREUM_WS_URL=wss://mainnet.infura.io/ws/v3/YOUR_PROJECT_ID
+```
+
+**Scheduler Modes:**
+- `realtime`: WebSocket only (fastest, requires stable connection)
+- `polling`: Traditional polling (most reliable)
+- `hybrid`: WebSocket with polling fallback (recommended)
 
 ### Monitoring
 

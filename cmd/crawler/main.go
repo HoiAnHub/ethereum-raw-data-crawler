@@ -47,6 +47,14 @@ func main() {
 			),
 		),
 
+		// Block scheduler service
+		fx.Provide(
+			fx.Annotate(
+				blockchain.NewWebSocketScheduler,
+				fx.As(new(service.BlockSchedulerService)),
+			),
+		),
+
 		// Repositories
 		fx.Provide(
 			fx.Annotate(
@@ -69,6 +77,7 @@ func main() {
 
 		// Application services
 		fx.Provide(appservice.NewCrawlerService),
+		fx.Provide(appservice.NewSchedulerService),
 
 		// Lifecycle hooks
 		fx.Invoke(registerHooks),
@@ -84,6 +93,7 @@ func registerHooks(
 	logger *logger.Logger,
 	db *database.MongoDB,
 	crawlerService *appservice.CrawlerService,
+	schedulerService *appservice.SchedulerService,
 ) {
 	lc.Append(fx.Hook{
 		OnStart: func(ctx context.Context) error {
@@ -97,9 +107,18 @@ func registerHooks(
 				return err
 			}
 
-			// Start crawler service
+			// Configure crawler for external scheduler mode
+			crawlerService.SetExternalSchedulerMode(true)
+
+			// Start crawler service (without internal worker)
 			if err := crawlerService.Start(ctx); err != nil {
 				logger.Error("Failed to start crawler service", zap.Error(err))
+				return err
+			}
+
+			// Start scheduler service (this will handle block scheduling)
+			if err := schedulerService.Start(ctx); err != nil {
+				logger.Error("Failed to start scheduler service", zap.Error(err))
 				return err
 			}
 
@@ -110,6 +129,13 @@ func registerHooks(
 				<-sigChan
 
 				logger.Info("Received shutdown signal")
+
+				// Stop scheduler service first
+				if err := schedulerService.Stop(); err != nil {
+					logger.Error("Error stopping scheduler service", zap.Error(err))
+				}
+
+				// Then stop crawler service
 				if err := crawlerService.Stop(ctx); err != nil {
 					logger.Error("Error stopping crawler service", zap.Error(err))
 				}
@@ -120,6 +146,11 @@ func registerHooks(
 		},
 		OnStop: func(ctx context.Context) error {
 			logger.Info("Stopping Ethereum Raw Data Crawler")
+
+			// Stop scheduler service first
+			if err := schedulerService.Stop(); err != nil {
+				logger.Error("Error stopping scheduler service", zap.Error(err))
+			}
 
 			// Stop crawler service
 			if err := crawlerService.Stop(ctx); err != nil {

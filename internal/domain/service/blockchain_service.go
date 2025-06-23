@@ -34,3 +34,21 @@ type BlockchainService interface {
 	// Health check
 	HealthCheck(ctx context.Context) error
 }
+
+// BlockSchedulerService defines the interface for real-time block scheduling
+type BlockSchedulerService interface {
+	// Start the scheduler to listen for new blocks
+	Start(ctx context.Context) error
+
+	// Stop the scheduler
+	Stop() error
+
+	// Check if scheduler is running
+	IsRunning() bool
+
+	// Subscribe to new block events
+	SubscribeNewBlocks(ctx context.Context, callback func(*big.Int)) error
+
+	// Unsubscribe from new block events
+	Unsubscribe() error
+}
