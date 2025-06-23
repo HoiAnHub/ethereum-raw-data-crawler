@@ -69,6 +69,8 @@ type SchedulerConfig struct {
 	FallbackTimeout   time.Duration `mapstructure:"fallback_timeout"`   // Time to wait before fallback to polling
 	ReconnectAttempts int           `mapstructure:"reconnect_attempts"` // Max WebSocket reconnection attempts
 	ReconnectDelay    time.Duration `mapstructure:"reconnect_delay"`    // Delay between reconnection attempts
+	MaxRetries        int           `mapstructure:"max_retries"`        // Max retries for failed blocks
+	SkipDuration      time.Duration `mapstructure:"skip_duration"`      // Duration to skip failed blocks
 }
 
 // GraphQLConfig represents GraphQL configuration
@@ -183,6 +185,8 @@ func setDefaults() {
 	viper.SetDefault("scheduler.fallback_timeout", "30s")
 	viper.SetDefault("scheduler.reconnect_attempts", 5)
 	viper.SetDefault("scheduler.reconnect_delay", "5s")
+	viper.SetDefault("scheduler.max_retries", 3)
+	viper.SetDefault("scheduler.skip_duration", "30s")
 
 	// GraphQL defaults
 	viper.SetDefault("graphql.endpoint", "/graphql")
@@ -239,6 +243,8 @@ func bindEnvVars() {
 	viper.BindEnv("scheduler.fallback_timeout", "SCHEDULER_FALLBACK_TIMEOUT")
 	viper.BindEnv("scheduler.reconnect_attempts", "SCHEDULER_RECONNECT_ATTEMPTS")
 	viper.BindEnv("scheduler.reconnect_delay", "SCHEDULER_RECONNECT_DELAY")
+	viper.BindEnv("scheduler.max_retries", "SCHEDULER_MAX_RETRIES")
+	viper.BindEnv("scheduler.skip_duration", "SCHEDULER_SKIP_DURATION")
 
 	// GraphQL
 	viper.BindEnv("graphql.endpoint", "GRAPHQL_ENDPOINT")

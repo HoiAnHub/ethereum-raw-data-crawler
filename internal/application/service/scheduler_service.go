@@ -7,6 +7,7 @@ import (
 	"ethereum-raw-data-crawler/internal/infrastructure/logger"
 	"fmt"
 	"math/big"
+	"strings"
 	"sync"
 	"time"
 
@@ -40,6 +41,12 @@ type SchedulerService struct {
 	pollingTicker   *time.Ticker
 	lastBlockTime   time.Time
 	fallbackTimeout time.Duration
+
+	// Error tracking for blocks
+	failedBlocks  map[string]int       // block_number -> failure_count
+	skippedBlocks map[string]time.Time // block_number -> skip_time
+	maxRetries    int
+	skipDuration  time.Duration
 }
 
 // NewSchedulerService creates a new scheduler service
@@ -70,6 +77,10 @@ func NewSchedulerService(
 		mode:            mode,
 		stopChan:        make(chan struct{}),
 		fallbackTimeout: config.Scheduler.FallbackTimeout,
+		failedBlocks:    make(map[string]int),
+		skippedBlocks:   make(map[string]time.Time),
+		maxRetries:      3,           // Default max retries
+		skipDuration:    time.Minute, // Default skip duration
 	}
 }
 
@@ -206,20 +217,75 @@ func (s *SchedulerService) startHybridMode(ctx context.Context) error {
 
 // handleNewBlock handles new block notifications from WebSocket
 func (s *SchedulerService) handleNewBlock(blockNumber *big.Int) {
+	blockNumStr := blockNumber.String()
 	s.logger.Info("Received new block notification",
-		zap.String("block_number", blockNumber.String()))
+		zap.String("block_number", blockNumStr))
 
 	// Update last block time
 	s.mu.Lock()
 	s.lastBlockTime = time.Now()
+
+	// Check if this block is currently being skipped due to previous failures
+	if skipTime, isSkipped := s.skippedBlocks[blockNumStr]; isSkipped {
+		if time.Since(skipTime) < s.skipDuration {
+			s.logger.Warn("Skipping block due to recent failures",
+				zap.String("block_number", blockNumStr),
+				zap.Duration("remaining_skip_time", s.skipDuration-time.Since(skipTime)))
+			s.mu.Unlock()
+			return
+		} else {
+			// Skip duration has passed, remove from skipped blocks
+			delete(s.skippedBlocks, blockNumStr)
+			delete(s.failedBlocks, blockNumStr) // Reset failure count
+		}
+	}
 	s.mu.Unlock()
 
 	// Trigger crawler to process the new block
 	ctx := context.Background()
 	if err := s.crawlerService.ProcessSpecificBlock(ctx, blockNumber); err != nil {
-		s.logger.Error("Failed to process new block",
-			zap.String("block_number", blockNumber.String()),
-			zap.Error(err))
+		s.handleBlockProcessingError(blockNumStr, err)
+	} else {
+		// Success: remove from failed blocks if it was there
+		s.mu.Lock()
+		delete(s.failedBlocks, blockNumStr)
+		s.mu.Unlock()
+	}
+}
+
+// handleBlockProcessingError handles errors during block processing with retry logic
+func (s *SchedulerService) handleBlockProcessingError(blockNumStr string, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Increment failure count
+	failureCount := s.failedBlocks[blockNumStr]
+	failureCount++
+	s.failedBlocks[blockNumStr] = failureCount
+
+	s.logger.Error("Failed to process new block",
+		zap.String("block_number", blockNumStr),
+		zap.Int("failure_count", failureCount),
+		zap.Int("max_retries", s.maxRetries),
+		zap.Error(err))
+
+	// Check if we've exceeded max retries
+	if failureCount >= s.maxRetries {
+		// Add to skipped blocks to prevent infinite retries
+		s.skippedBlocks[blockNumStr] = time.Now()
+		s.logger.Warn("Block processing failed too many times, skipping temporarily",
+			zap.String("block_number", blockNumStr),
+			zap.Int("failure_count", failureCount),
+			zap.Duration("skip_duration", s.skipDuration))
+
+		// Check if this is a MongoDB upsert/duplicate error - these might resolve themselves
+		errorMsg := err.Error()
+		if strings.Contains(errorMsg, "_id") && strings.Contains(errorMsg, "immutable") ||
+			strings.Contains(errorMsg, "duplicate key error") ||
+			strings.Contains(errorMsg, "E11000") {
+			s.logger.Info("MongoDB conflict error detected, block might already be processed",
+				zap.String("block_number", blockNumStr))
+		}
 	}
 }
 

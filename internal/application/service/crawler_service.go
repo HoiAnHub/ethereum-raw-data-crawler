@@ -475,6 +475,16 @@ func (s *CrawlerService) saveTransactions(ctx context.Context, transactions []*e
 
 				if insertErr := s.txRepo.CreateTransactions(ctx, transactions); insertErr != nil {
 					fallbackDuration := time.Since(fallbackStart)
+
+					// Check if this is a duplicate key error which means data already exists
+					if strings.Contains(insertErr.Error(), "E11000") || strings.Contains(insertErr.Error(), "duplicate key") {
+						logger.Warn("Transactions already exist in database, considering as success",
+							zap.Int("transaction_count", txCount),
+							zap.Duration("fallback_duration", fallbackDuration),
+							zap.Duration("total_duration", time.Since(start)))
+						return nil // Consider this as success since data is already there
+					}
+
 					logger.Error("Fallback batch insert also failed",
 						zap.Error(insertErr),
 						zap.Int("transaction_count", txCount),

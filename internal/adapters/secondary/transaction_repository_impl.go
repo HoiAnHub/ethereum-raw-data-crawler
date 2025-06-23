@@ -124,8 +124,35 @@ func (r *TransactionRepositoryImpl) UpsertTransactions(ctx context.Context, txs 
 			// Create filter based on transaction hash (unique identifier)
 			filter := bson.M{"hash": tx.Hash}
 
-			// Create update document
-			update := bson.M{"$set": tx}
+			// Create update document excluding _id field to avoid immutable field error
+			update := bson.M{
+				"$set": bson.M{
+					"hash":                     tx.Hash,
+					"block_hash":               tx.BlockHash,
+					"block_number":             tx.BlockNumber,
+					"transaction_index":        tx.TransactionIndex,
+					"from":                     tx.From,
+					"to":                       tx.To,
+					"value":                    tx.Value,
+					"gas":                      tx.Gas,
+					"gas_price":                tx.GasPrice,
+					"gas_used":                 tx.GasUsed,
+					"cumulative_gas_used":      tx.CumulativeGasUsed,
+					"data":                     tx.Data,
+					"nonce":                    tx.Nonce,
+					"status":                   tx.Status,
+					"max_fee_per_gas":          tx.MaxFeePerGas,
+					"max_priority_fee_per_gas": tx.MaxPriorityFeePerGas,
+					"contract_address":         tx.ContractAddress,
+					"crawled_at":               tx.CrawledAt,
+					"network":                  tx.Network,
+					"processed_at":             tx.ProcessedAt,
+					"tx_status":                tx.TxStatus,
+				},
+				"$setOnInsert": bson.M{
+					"_id": tx.ID,
+				},
+			}
 
 			// Create upsert operation
 			upsertOp := mongo.NewUpdateOneModel()
