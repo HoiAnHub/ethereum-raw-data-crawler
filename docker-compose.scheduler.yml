@@ -3,7 +3,7 @@ services:
   mongodb:
     image: mongo:7.0
     container_name: ethereum-scheduler-mongodb
-    restart: unless-stopped
+    restart: always
     environment:
       MONGO_INITDB_ROOT_USERNAME: admin
       MONGO_INITDB_ROOT_PASSWORD: password
@@ -13,7 +13,9 @@ services:
     command:
       - "--bind_ip_all"
       - "--maxConns=1000"
-      - "--wiredTigerCacheSizeGB=0.5"
+      - "--wiredTigerCacheSizeGB=0.25"
+      - "--slowms=1000"
+      - "--profile=1"
     volumes:
       - mongodb_data:/data/db
       - ./scripts/mongo-init.js:/docker-entrypoint-initdb.d/mongo-init.js:ro
@@ -21,16 +23,23 @@ services:
       - ethereum-scheduler-network
     healthcheck:
       test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')", "--quiet"]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 60s
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 30s
     deploy:
       resources:
         limits:
-          memory: 1G
+          memory: 768M
+          cpus: '1.0'
         reservations:
-          memory: 512M
+          memory: 256M
+          cpus: '0.5'
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   # Ethereum block scheduler application
   ethereum-scheduler:
@@ -38,18 +47,16 @@ services:
       context: .
       dockerfile: Dockerfile.scheduler
     container_name: ethereum-scheduler-app
-    restart: unless-stopped
+    restart: always
     depends_on:
       mongodb:
         condition: service_healthy
     environment:
-      # MongoDB Configuration with optimized connection settings
-      # MONGO_URI: mongodb://admin:password@mongodb:27017/ethereum_raw_data?authSource=admin
-      # MONGO_URI: ${MONGO_URI:-mongodb://admin:password@mongodb:27017/ethereum_raw_data?authSource=admin&maxPoolSize=50&minPoolSize=5&maxIdleTimeMS=30000&serverSelectionTimeoutMS=5000&socketTimeoutMS=30000&connectTimeoutMS=10000&heartbeatFrequencyMS=10000&retryWrites=true&retryReads=true}
-      MONGO_URI: mongodb://admin:password@mongodb:27017/ethereum_raw_data?authSource=admin&maxPoolSize=50&minPoolSize=5&maxIdleTimeMS=30000&serverSelectionTimeoutMS=5000&socketTimeoutMS=30000&connectTimeoutMS=10000&heartbeatFrequencyMS=10000&retryWrites=true&retryReads=true
+      # MongoDB Configuration with conservative settings for stability
+      MONGO_URI: ${MONGO_URI:-mongodb://admin:password@mongodb:27017/ethereum_raw_data?authSource=admin&maxPoolSize=10&minPoolSize=2&maxIdleTimeMS=60000&serverSelectionTimeoutMS=10000&socketTimeoutMS=60000&connectTimeoutMS=15000&heartbeatFrequencyMS=30000&retryWrites=true&retryReads=true&maxConnecting=3}
       MONGO_DATABASE: ethereum_raw_data
-      MONGO_CONNECT_TIMEOUT: 10s
-      MONGO_MAX_POOL_SIZE: 50
+      MONGO_CONNECT_TIMEOUT: 15s
+      MONGO_MAX_POOL_SIZE: 10
 
       # Ethereum Configuration
       ETHEREUM_RPC_URL: ${ETHEREUM_RPC_URL:-https://mainnet.infura.io/v3/YOUR_PROJECT_ID}
@@ -86,16 +93,24 @@ services:
     networks:
       - ethereum-scheduler-network
     healthcheck:
-      test: ["CMD", "pgrep", "scheduler"]
+      test: ["CMD", "ps", "aux"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+        reservations:
+          memory: 256M
+          cpus: '0.25'
     logging:
       driver: "json-file"
       options:
-        max-size: "100m"
-        max-file: "5"
+        max-size: "50m"
+        max-file: "3"
 
 volumes:
   mongodb_data:

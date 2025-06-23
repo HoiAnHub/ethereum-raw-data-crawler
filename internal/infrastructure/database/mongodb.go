@@ -22,19 +22,20 @@ func NewMongoDB(cfg *config.MongoDBConfig) (*MongoDB, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.ConnectTimeout)
 	defer cancel()
 
-	// Configure client options with enhanced settings for stability
+	// Configure client options with conservative settings for long-term stability
 	clientOptions := options.Client().
 		ApplyURI(cfg.URI).
 		SetMaxPoolSize(cfg.MaxPoolSize).
-		SetMinPoolSize(5).                          // Maintain minimum connections
-		SetMaxConnIdleTime(30 * time.Second).       // Close idle connections after 30s
-		SetConnectTimeout(cfg.ConnectTimeout).      // Connection timeout
-		SetSocketTimeout(30 * time.Second).         // Socket timeout
-		SetServerSelectionTimeout(5 * time.Second). // Server selection timeout
-		SetHeartbeatInterval(10 * time.Second).     // Heartbeat frequency
-		SetMaxConnecting(10).                       // Max concurrent connections
-		SetRetryWrites(true).                       // Enable retry writes
-		SetRetryReads(true)                         // Enable retry reads
+		SetMinPoolSize(2).                           // Conservative minimum connections
+		SetMaxConnIdleTime(60 * time.Second).        // Keep connections longer
+		SetConnectTimeout(cfg.ConnectTimeout).       // Connection timeout
+		SetSocketTimeout(60 * time.Second).          // Longer socket timeout
+		SetServerSelectionTimeout(10 * time.Second). // Longer server selection timeout
+		SetHeartbeatInterval(30 * time.Second).      // Less frequent heartbeats
+		SetMaxConnecting(3).                         // Limit concurrent connections
+		SetRetryWrites(true).                        // Enable retry writes
+		SetRetryReads(true).                         // Enable retry reads
+		SetCompressors([]string{"snappy"})           // Enable compression
 
 	// Connect to MongoDB
 	client, err := mongo.Connect(ctx, clientOptions)
@@ -197,19 +198,20 @@ func (m *MongoDB) Reconnect(ctx context.Context) error {
 		// Log error but continue with reconnection attempt
 	}
 
-	// Configure client options with same settings as NewMongoDB
+	// Configure client options with same conservative settings as NewMongoDB
 	clientOptions := options.Client().
 		ApplyURI(m.config.URI).
 		SetMaxPoolSize(m.config.MaxPoolSize).
-		SetMinPoolSize(5).
-		SetMaxConnIdleTime(30 * time.Second).
+		SetMinPoolSize(2).
+		SetMaxConnIdleTime(60 * time.Second).
 		SetConnectTimeout(m.config.ConnectTimeout).
-		SetSocketTimeout(30 * time.Second).
-		SetServerSelectionTimeout(5 * time.Second).
-		SetHeartbeatInterval(10 * time.Second).
-		SetMaxConnecting(10).
+		SetSocketTimeout(60 * time.Second).
+		SetServerSelectionTimeout(10 * time.Second).
+		SetHeartbeatInterval(30 * time.Second).
+		SetMaxConnecting(3).
 		SetRetryWrites(true).
-		SetRetryReads(true)
+		SetRetryReads(true).
+		SetCompressors([]string{"snappy"})
 
 	// Connect to MongoDB
 	client, err := mongo.Connect(ctx, clientOptions)
