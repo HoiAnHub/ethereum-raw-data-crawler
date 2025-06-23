@@ -482,7 +482,7 @@ func (s *CrawlerService) processBlock(ctx context.Context, blockNumber *big.Int)
 	s.updateProcessingMetrics(block, transactions)
 
 	logger.Info("Block processed successfully",
-		zap.String("block_number", block.Number),
+		zap.String("block_number11", block.Number),
 		zap.Int("transaction_count", len(transactions)))
 
 	return nil
