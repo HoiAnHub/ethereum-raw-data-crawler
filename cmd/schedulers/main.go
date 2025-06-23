@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"go.uber.org/fx"
 	"go.uber.org/zap"
@@ -30,6 +31,9 @@ func provideEthereumConfig(cfg *config.Config) *config.EthereumConfig {
 
 func main() {
 	app := fx.New(
+		// Increase startup timeout for scheduler
+		fx.StartTimeout(5*time.Minute),
+		fx.StopTimeout(30*time.Second),
 		// Configuration
 		fx.Provide(config.LoadConfig),
 		fx.Provide(provideMongoDBConfig),
@@ -130,12 +134,12 @@ func registerSchedulerHooks(
 				<-sigChan
 
 				logger.Info("Received shutdown signal")
-				
+
 				// Stop scheduler service first
 				if err := schedulerService.Stop(); err != nil {
 					logger.Error("Error stopping scheduler service", zap.Error(err))
 				}
-				
+
 				// Then stop crawler service
 				if err := crawlerService.Stop(ctx); err != nil {
 					logger.Error("Error stopping crawler service", zap.Error(err))

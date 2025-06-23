@@ -16,24 +16,26 @@ import (
 
 // WebSocketScheduler implements BlockSchedulerService using WebSocket
 type WebSocketScheduler struct {
-	config      *config.EthereumConfig
-	logger      *logger.Logger
-	conn        *websocket.Conn
-	isRunning   bool
-	callback    func(*big.Int)
-	stopChan    chan struct{}
-	mu          sync.RWMutex
-	subID       string
-	reconnectCh chan struct{}
+	config          *config.EthereumConfig
+	logger          *logger.Logger
+	conn            *websocket.Conn
+	isRunning       bool
+	callback        func(*big.Int)
+	stopChan        chan struct{}
+	mu              sync.RWMutex
+	subID           string
+	reconnectCh     chan struct{}
+	lastMessageTime time.Time
 }
 
 // NewWebSocketScheduler creates a new WebSocket scheduler
 func NewWebSocketScheduler(cfg *config.EthereumConfig, logger *logger.Logger) service.BlockSchedulerService {
 	return &WebSocketScheduler{
-		config:      cfg,
-		logger:      logger.WithComponent("websocket-scheduler"),
-		stopChan:    make(chan struct{}),
-		reconnectCh: make(chan struct{}, 1),
+		config:          cfg,
+		logger:          logger.WithComponent("websocket-scheduler"),
+		stopChan:        make(chan struct{}),
+		reconnectCh:     make(chan struct{}, 1),
+		lastMessageTime: time.Now(),
 	}
 }
 
@@ -193,31 +195,62 @@ func (w *WebSocketScheduler) messageListener(ctx context.Context) {
 		if r := recover(); r != nil {
 			w.logger.Error("Message listener panic recovered", zap.Any("panic", r))
 		}
+		w.logger.Info("Message listener stopped")
 	}()
+
+	w.logger.Info("Message listener started")
 
 	for {
 		select {
 		case <-w.stopChan:
+			w.logger.Info("Message listener received stop signal")
 			return
 		case <-ctx.Done():
+			w.logger.Info("Message listener context cancelled")
 			return
 		default:
-			if w.conn == nil {
+			w.mu.RLock()
+			conn := w.conn
+			running := w.isRunning
+			w.mu.RUnlock()
+
+			if !running {
+				w.logger.Debug("Scheduler not running, stopping message listener")
+				return
+			}
+
+			if conn == nil {
+				w.logger.Debug("No WebSocket connection, waiting...")
 				time.Sleep(1 * time.Second)
 				continue
 			}
 
+			// Set read deadline to prevent hanging
+			conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+
 			var message map[string]interface{}
-			if err := w.conn.ReadJSON(&message); err != nil {
-				w.logger.Error("Failed to read WebSocket message", zap.Error(err))
-				// Trigger reconnection
+			if err := conn.ReadJSON(&message); err != nil {
+				// Check if it's a normal close or timeout
+				if websocket.IsCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure, websocket.CloseNormalClosure) {
+					w.logger.Warn("WebSocket connection closed", zap.Error(err))
+				} else if netErr, ok := err.(interface{ Timeout() bool }); ok && netErr.Timeout() {
+					w.logger.Debug("WebSocket read timeout, continuing...")
+					continue
+				} else {
+					w.logger.Error("Failed to read WebSocket message", zap.Error(err))
+				}
+
+				// Trigger reconnection for any error
 				select {
 				case w.reconnectCh <- struct{}{}:
+					w.logger.Info("Triggered WebSocket reconnection")
 				default:
+					w.logger.Debug("Reconnection already in progress")
 				}
 				return
 			}
 
+			w.logger.Debug("Received WebSocket message", zap.Any("message_type", message["method"]))
 			w.handleMessage(message)
 		}
 	}
@@ -225,6 +258,11 @@ func (w *WebSocketScheduler) messageListener(ctx context.Context) {
 
 // handleMessage processes incoming WebSocket messages
 func (w *WebSocketScheduler) handleMessage(message map[string]interface{}) {
+	// Update last message time
+	w.mu.Lock()
+	w.lastMessageTime = time.Now()
+	w.mu.Unlock()
+
 	// Handle subscription confirmation
 	if result, ok := message["result"].(string); ok && w.subID == "" {
 		w.subID = result
@@ -236,11 +274,13 @@ func (w *WebSocketScheduler) handleMessage(message map[string]interface{}) {
 	if method, ok := message["method"].(string); ok && method == "eth_subscription" {
 		params, ok := message["params"].(map[string]interface{})
 		if !ok {
+			w.logger.Debug("Invalid params in eth_subscription message")
 			return
 		}
 
 		result, ok := params["result"].(map[string]interface{})
 		if !ok {
+			w.logger.Debug("Invalid result in eth_subscription params")
 			return
 		}
 
@@ -255,7 +295,11 @@ func (w *WebSocketScheduler) handleMessage(message map[string]interface{}) {
 				if w.callback != nil {
 					go w.callback(blockNumber)
 				}
+			} else {
+				w.logger.Error("Failed to parse block number", zap.String("number_hex", numberHex))
 			}
+		} else {
+			w.logger.Debug("No block number in subscription result")
 		}
 	}
 }
@@ -265,23 +309,69 @@ func (w *WebSocketScheduler) connectionMonitor(ctx context.Context) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
+	// Retry ticker for failed reconnections
+	retryTicker := time.NewTicker(60 * time.Second)
+	defer retryTicker.Stop()
+
+	w.logger.Info("Connection monitor started")
+
 	for {
 		select {
 		case <-w.stopChan:
+			w.logger.Info("Connection monitor received stop signal")
 			return
 		case <-ctx.Done():
+			w.logger.Info("Connection monitor context cancelled")
 			return
 		case <-w.reconnectCh:
+			w.logger.Info("Connection monitor handling reconnection request")
 			w.handleReconnection(ctx)
+		case <-retryTicker.C:
+			// Check if we need to retry connection
+			w.mu.RLock()
+			running := w.isRunning
+			conn := w.conn
+			w.mu.RUnlock()
+
+			if running && conn == nil {
+				w.logger.Info("No active connection, attempting reconnection")
+				w.handleReconnection(ctx)
+			}
 		case <-ticker.C:
-			// Ping to check connection health
-			if w.conn != nil {
-				if err := w.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+			// Check connection health
+			w.mu.RLock()
+			conn := w.conn
+			running := w.isRunning
+			lastMessageTime := w.lastMessageTime
+			w.mu.RUnlock()
+
+			if running && conn != nil {
+				// Check if we haven't received messages for too long
+				timeSinceLastMessage := time.Since(lastMessageTime)
+				if timeSinceLastMessage > 2*time.Minute {
+					w.logger.Warn("No messages received for too long, triggering reconnection",
+						zap.Duration("time_since_last_message", timeSinceLastMessage))
+					select {
+					case w.reconnectCh <- struct{}{}:
+						w.logger.Info("Triggered reconnection due to message timeout")
+					default:
+						w.logger.Debug("Reconnection already in progress")
+					}
+					continue
+				}
+
+				// Send ping to check connection health
+				w.logger.Debug("Sending WebSocket ping")
+				if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
 					w.logger.Warn("WebSocket ping failed, triggering reconnection", zap.Error(err))
 					select {
 					case w.reconnectCh <- struct{}{}:
+						w.logger.Info("Triggered reconnection due to ping failure")
 					default:
+						w.logger.Debug("Reconnection already in progress")
 					}
+				} else {
+					w.logger.Debug("WebSocket ping successful")
 				}
 			}
 		}
@@ -294,6 +384,7 @@ func (w *WebSocketScheduler) handleReconnection(ctx context.Context) {
 	defer w.mu.Unlock()
 
 	if !w.isRunning {
+		w.logger.Debug("Scheduler not running, skipping reconnection")
 		return
 	}
 
@@ -309,9 +400,23 @@ func (w *WebSocketScheduler) handleReconnection(ctx context.Context) {
 	w.subID = ""
 
 	// Retry connection with exponential backoff
-	maxRetries := 5
+	maxRetries := 10 // Increased retries
 	for attempt := 1; attempt <= maxRetries; attempt++ {
-		backoff := time.Duration(attempt*attempt) * time.Second
+		if !w.isRunning {
+			w.logger.Info("Scheduler stopped during reconnection")
+			return
+		}
+
+		backoff := time.Duration(attempt) * 2 * time.Second // Linear backoff
+		if backoff > 30*time.Second {
+			backoff = 30 * time.Second // Cap at 30 seconds
+		}
+
+		w.logger.Info("Reconnection attempt",
+			zap.Int("attempt", attempt),
+			zap.Int("max_retries", maxRetries),
+			zap.Duration("backoff", backoff))
+
 		time.Sleep(backoff)
 
 		if err := w.connect(ctx); err != nil {
@@ -325,17 +430,23 @@ func (w *WebSocketScheduler) handleReconnection(ctx context.Context) {
 		if w.callback != nil {
 			if err := w.subscribeToBlocks(); err != nil {
 				w.logger.Error("Failed to re-subscribe after reconnection", zap.Error(err))
+				// Close the connection and try again
+				if w.conn != nil {
+					w.conn.Close()
+					w.conn = nil
+				}
 				continue
 			}
 
 			// Restart message listener
+			w.logger.Info("Restarting message listener after reconnection")
 			go w.messageListener(ctx)
 		}
 
-		w.logger.Info("Successfully reconnected WebSocket")
+		w.logger.Info("Successfully reconnected WebSocket", zap.Int("attempt", attempt))
 		return
 	}
 
-	w.logger.Error("Failed to reconnect after maximum retries")
-	w.isRunning = false
+	w.logger.Error("Failed to reconnect after maximum retries, scheduler will continue trying...")
+	// Don't set isRunning to false, keep trying in background
 }

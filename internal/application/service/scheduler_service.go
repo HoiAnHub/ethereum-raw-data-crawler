@@ -180,6 +180,12 @@ func (s *SchedulerService) startPollingMode(ctx context.Context) error {
 	s.isRunning = true
 	s.logger.Info("Scheduler started in polling mode",
 		zap.Duration("polling_interval", s.config.Scheduler.PollingInterval))
+
+	// Update last block time to current time for polling mode
+	s.mu.Lock()
+	s.lastBlockTime = time.Now()
+	s.mu.Unlock()
+
 	return nil
 }
 
@@ -225,15 +231,26 @@ func (s *SchedulerService) pollingWorker(ctx context.Context) {
 		}
 	}()
 
+	s.logger.Info("Polling worker started")
+
 	for {
 		select {
 		case <-s.stopChan:
+			s.logger.Info("Polling worker received stop signal")
 			return
 		case <-ctx.Done():
+			s.logger.Info("Polling worker context cancelled")
 			return
 		case <-s.pollingTicker.C:
+			s.logger.Debug("Polling worker tick - checking for new blocks")
 			if err := s.crawlerService.processNextBlocks(ctx); err != nil {
 				s.logger.Error("Error in polling worker", zap.Error(err))
+			} else {
+				// Update last block time on successful processing
+				s.mu.Lock()
+				s.lastBlockTime = time.Now()
+				s.mu.Unlock()
+				s.logger.Debug("Polling worker completed successfully")
 			}
 		}
 	}
@@ -244,32 +261,53 @@ func (s *SchedulerService) fallbackMonitor(ctx context.Context) {
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 
+	s.logger.Info("Fallback monitor started")
+
 	for {
 		select {
 		case <-s.stopChan:
+			s.logger.Info("Fallback monitor received stop signal")
 			return
 		case <-ctx.Done():
+			s.logger.Info("Fallback monitor context cancelled")
 			return
 		case <-ticker.C:
 			s.mu.RLock()
 			timeSinceLastBlock := time.Since(s.lastBlockTime)
+			pollingActive := s.pollingTicker != nil
 			s.mu.RUnlock()
+
+			// Check if WebSocket is working
+			wsWorking := s.blockScheduler != nil && s.blockScheduler.IsRunning()
+
+			s.logger.Debug("Fallback monitor check",
+				zap.Duration("time_since_last_block", timeSinceLastBlock),
+				zap.Bool("websocket_running", wsWorking),
+				zap.Bool("polling_active", pollingActive))
 
 			// If no blocks received for fallbackTimeout, start polling
 			if timeSinceLastBlock > s.fallbackTimeout {
-				if s.pollingTicker == nil {
+				if !pollingActive {
 					s.logger.Warn("No blocks received via WebSocket, starting fallback polling",
-						zap.Duration("time_since_last_block", timeSinceLastBlock))
+						zap.Duration("time_since_last_block", timeSinceLastBlock),
+						zap.Bool("websocket_running", wsWorking))
 
+					s.mu.Lock()
 					s.pollingTicker = time.NewTicker(s.config.Scheduler.PollingInterval)
+					s.mu.Unlock()
+
 					go s.pollingWorker(ctx)
 				}
 			} else {
 				// If blocks are coming via WebSocket, stop polling
-				if s.pollingTicker != nil {
+				if pollingActive && wsWorking {
 					s.logger.Info("WebSocket blocks resumed, stopping fallback polling")
-					s.pollingTicker.Stop()
-					s.pollingTicker = nil
+					s.mu.Lock()
+					if s.pollingTicker != nil {
+						s.pollingTicker.Stop()
+						s.pollingTicker = nil
+					}
+					s.mu.Unlock()
 				}
 			}
 		}
