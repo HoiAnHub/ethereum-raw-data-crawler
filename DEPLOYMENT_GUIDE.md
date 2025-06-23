@@ -43,7 +43,7 @@ sudo usermod -aG docker $USER
 ### 2.1. Clone Repository
 ```bash
 # Clone repository
-git clone https://github.com/your-org/ethereum-raw-data-crawler.git
+git clone https://github.com/HoiAnHub/ethereum-raw-data-crawler.git
 cd ethereum-raw-data-crawler
 ```
 
@@ -107,6 +107,12 @@ docker ps
 Xem logs:
 ```bash
 ./scripts/run-scheduler.sh logs --follow
+```
+
+### 2.5. Kiểm tra các biến môi trường
+```bash
+# Kiểm tra các biến môi trường trong container
+docker exec ethereum-scheduler-app env
 ```
 
 ## 3. Kết Nối MongoDB Với Ứng Dụng Bên Ngoài
