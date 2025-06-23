@@ -39,6 +39,7 @@ type SchedulerService struct {
 
 	// Fallback polling
 	pollingTicker   *time.Ticker
+	pollingStopChan chan struct{} // Channel to stop polling worker
 	lastBlockTime   time.Time
 	fallbackTimeout time.Duration
 
@@ -76,6 +77,7 @@ func NewSchedulerService(
 		logger:          logger.WithComponent("scheduler-service"),
 		mode:            mode,
 		stopChan:        make(chan struct{}),
+		pollingStopChan: nil, // Will be created when polling starts
 		fallbackTimeout: config.Scheduler.FallbackTimeout,
 		failedBlocks:    make(map[string]int),
 		skippedBlocks:   make(map[string]time.Time),
@@ -135,6 +137,12 @@ func (s *SchedulerService) Stop() error {
 		s.pollingTicker = nil
 	}
 
+	// Stop polling worker
+	if s.pollingStopChan != nil {
+		close(s.pollingStopChan)
+		s.pollingStopChan = nil
+	}
+
 	return nil
 }
 
@@ -185,8 +193,9 @@ func (s *SchedulerService) startRealtimeMode(ctx context.Context) error {
 func (s *SchedulerService) startPollingMode(ctx context.Context) error {
 	// Use configured polling interval
 	s.pollingTicker = time.NewTicker(s.config.Scheduler.PollingInterval)
+	s.pollingStopChan = make(chan struct{})
 
-	go s.pollingWorker(ctx)
+	go s.pollingWorker(ctx, s.pollingTicker, s.pollingStopChan)
 
 	s.isRunning = true
 	s.logger.Info("Scheduler started in polling mode",
@@ -290,11 +299,12 @@ func (s *SchedulerService) handleBlockProcessingError(blockNumStr string, err er
 }
 
 // pollingWorker runs the polling loop
-func (s *SchedulerService) pollingWorker(ctx context.Context) {
+func (s *SchedulerService) pollingWorker(ctx context.Context, ticker *time.Ticker, stopChan chan struct{}) {
 	defer func() {
-		if s.pollingTicker != nil {
-			s.pollingTicker.Stop()
+		if ticker != nil {
+			ticker.Stop()
 		}
+		s.logger.Info("Polling worker stopped")
 	}()
 
 	s.logger.Info("Polling worker started")
@@ -302,12 +312,15 @@ func (s *SchedulerService) pollingWorker(ctx context.Context) {
 	for {
 		select {
 		case <-s.stopChan:
-			s.logger.Info("Polling worker received stop signal")
+			s.logger.Info("Polling worker received global stop signal")
+			return
+		case <-stopChan:
+			s.logger.Info("Polling worker received specific stop signal")
 			return
 		case <-ctx.Done():
 			s.logger.Info("Polling worker context cancelled")
 			return
-		case <-s.pollingTicker.C:
+		case <-ticker.C:
 			s.logger.Debug("Polling worker tick - checking for new blocks")
 			if err := s.crawlerService.processNextBlocks(ctx); err != nil {
 				s.logger.Error("Error in polling worker", zap.Error(err))
@@ -360,9 +373,12 @@ func (s *SchedulerService) fallbackMonitor(ctx context.Context) {
 
 					s.mu.Lock()
 					s.pollingTicker = time.NewTicker(s.config.Scheduler.PollingInterval)
+					ticker := s.pollingTicker // Store reference before unlocking
 					s.mu.Unlock()
 
-					go s.pollingWorker(ctx)
+					stopChan := make(chan struct{})
+					s.pollingStopChan = stopChan
+					go s.pollingWorker(ctx, ticker, stopChan)
 				}
 			} else {
 				// If blocks are coming via WebSocket, stop polling
@@ -372,6 +388,10 @@ func (s *SchedulerService) fallbackMonitor(ctx context.Context) {
 					if s.pollingTicker != nil {
 						s.pollingTicker.Stop()
 						s.pollingTicker = nil
+					}
+					if s.pollingStopChan != nil {
+						close(s.pollingStopChan)
+						s.pollingStopChan = nil
 					}
 					s.mu.Unlock()
 				}
