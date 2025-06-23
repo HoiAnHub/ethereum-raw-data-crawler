@@ -219,3 +219,130 @@ release: clean test lint build-all
 ## Full CI pipeline
 ci: deps fmt vet lint test
 	@echo "$(GREEN)CI pipeline completed successfully!$(NC)"
+
+# ===== WebSocket Listener Service =====
+
+## Build WebSocket Listener
+build-websocket:
+	@echo "$(BLUE)Building WebSocket Listener...$(NC)"
+	mkdir -p $(BUILD_DIR)
+	CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o $(BUILD_DIR)/websocket-listener cmd/websocket-listener/main.go
+
+## Run WebSocket Listener locally
+run-websocket:
+	@echo "$(BLUE)Running WebSocket Listener...$(NC)"
+	go run cmd/websocket-listener/main.go
+
+## Build WebSocket Listener Docker image
+docker-build-websocket:
+	@echo "$(BLUE)Building WebSocket Listener Docker image...$(NC)"
+	docker build -f Dockerfile.websocket-listener -t ethereum-websocket-listener:$(DOCKER_TAG) .
+
+## Start WebSocket Listener services with docker-compose
+websocket-up:
+	@echo "$(BLUE)Starting WebSocket Listener services...$(NC)"
+	docker-compose -f docker-compose.websocket-listener.yml up -d
+
+## Stop WebSocket Listener services
+websocket-down:
+	@echo "$(BLUE)Stopping WebSocket Listener services...$(NC)"
+	docker-compose -f docker-compose.websocket-listener.yml down
+
+## View WebSocket Listener logs
+websocket-logs:
+	@echo "$(BLUE)Viewing WebSocket Listener logs...$(NC)"
+	docker-compose -f docker-compose.websocket-listener.yml logs -f ethereum-websocket-listener
+
+## View all WebSocket Listener service logs
+websocket-logs-all:
+	@echo "$(BLUE)Viewing all WebSocket Listener service logs...$(NC)"
+	docker-compose -f docker-compose.websocket-listener.yml logs -f
+
+## Connect to WebSocket Listener MongoDB
+websocket-mongo-shell:
+	@echo "$(BLUE)Connecting to WebSocket Listener MongoDB...$(NC)"
+	docker exec -it ethereum-websocket-mongodb mongosh ethereum_raw_data
+
+## Status of WebSocket Listener services
+websocket-status:
+	@echo "$(BLUE)WebSocket Listener Service Status:$(NC)"
+	@echo "$(YELLOW)Docker Containers:$(NC)"
+	@docker ps --filter "name=ethereum-websocket" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" || echo "No containers running"
+
+## Restart WebSocket Listener
+websocket-restart: websocket-down websocket-up
+	@echo "$(GREEN)WebSocket Listener restarted!$(NC)"
+
+## Setup WebSocket Listener environment
+websocket-setup:
+	@echo "$(BLUE)Setting up WebSocket Listener environment...$(NC)"
+	@echo "$(YELLOW)WebSocket Listener Environment Variables:$(NC)"
+	@echo "  ETHEREUM_WS_URL - WebSocket URL for Ethereum node"
+	@echo "  WEBSOCKET_BATCH_SIZE - Batch size for database writes"
+	@echo "  WEBSOCKET_SUBSCRIBE_TO_BLOCKS - Subscribe to new blocks (true/false)"
+	@echo "  WEBSOCKET_SUBSCRIBE_TO_TXS - Subscribe to pending transactions (true/false)"
+	@echo "  WEBSOCKET_SUBSCRIBE_TO_LOGS - Subscribe to contract logs (true/false)"
+	@echo "$(GREEN)Add these to your .env file for local development$(NC)"
+
+# ===== Scheduler Service =====
+
+## Build Scheduler
+build-scheduler:
+	@echo "$(BLUE)Building Scheduler...$(NC)"
+	mkdir -p $(BUILD_DIR)
+	CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o $(BUILD_DIR)/scheduler cmd/schedulers/main.go
+
+## Run Scheduler locally
+run-scheduler:
+	@echo "$(BLUE)Running Scheduler...$(NC)"
+	go run cmd/schedulers/main.go
+
+## Start Scheduler services with docker-compose
+scheduler-up:
+	@echo "$(BLUE)Starting Scheduler services...$(NC)"
+	docker-compose -f docker-compose.scheduler.yml up -d
+
+## Stop Scheduler services
+scheduler-down:
+	@echo "$(BLUE)Stopping Scheduler services...$(NC)"
+	docker-compose -f docker-compose.scheduler.yml down
+
+## View Scheduler logs
+scheduler-logs:
+	@echo "$(BLUE)Viewing Scheduler logs...$(NC)"
+	docker-compose -f docker-compose.scheduler.yml logs -f ethereum-scheduler
+
+## Status of Scheduler services
+scheduler-status:
+	@echo "$(BLUE)Scheduler Service Status:$(NC)"
+	@echo "$(YELLOW)Docker Containers:$(NC)"
+	@docker ps --filter "name=ethereum-scheduler" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" || echo "No containers running"
+
+# ===== All Services Management =====
+
+## Start all services (Crawler, Scheduler, WebSocket Listener)
+start-all:
+	@echo "$(BLUE)Starting all services...$(NC)"
+	make docker-compose-up
+	make scheduler-up
+	make websocket-up
+	@echo "$(GREEN)All services started!$(NC)"
+	@echo "$(YELLOW)Services running:$(NC)"
+	@echo "  - Crawler: docker-compose.yml"
+	@echo "  - Scheduler: docker-compose.scheduler.yml"
+	@echo "  - WebSocket Listener: docker-compose.websocket-listener.yml"
+
+## Stop all services
+stop-all:
+	@echo "$(BLUE)Stopping all services...$(NC)"
+	make docker-compose-down
+	make scheduler-down
+	make websocket-down
+	@echo "$(GREEN)All services stopped!$(NC)"
+
+## Show status of all services
+status-all:
+	@echo "$(BLUE)All Services Status:$(NC)"
+	make status
+	make scheduler-status
+	make websocket-status

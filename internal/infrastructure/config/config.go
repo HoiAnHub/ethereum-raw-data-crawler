@@ -16,6 +16,7 @@ type Config struct {
 	MongoDB    MongoDBConfig    `mapstructure:"mongodb"`
 	Crawler    CrawlerConfig    `mapstructure:"crawler"`
 	Scheduler  SchedulerConfig  `mapstructure:"scheduler"`
+	WebSocket  WebSocketConfig  `mapstructure:"websocket"`
 	GraphQL    GraphQLConfig    `mapstructure:"graphql"`
 	Monitoring MonitoringConfig `mapstructure:"monitoring"`
 	NATS       NATSConfig       `mapstructure:"nats"`
@@ -196,6 +197,22 @@ func setDefaults() {
 	viper.SetDefault("monitoring.metrics_enabled", true)
 	viper.SetDefault("monitoring.health_check_interval", "30s")
 
+	// WebSocket defaults
+	viper.SetDefault("websocket.reconnect_attempts", 5)
+	viper.SetDefault("websocket.reconnect_delay", "5s")
+	viper.SetDefault("websocket.ping_interval", "30s")
+	viper.SetDefault("websocket.read_timeout", "60s")
+	viper.SetDefault("websocket.write_timeout", "10s")
+	viper.SetDefault("websocket.buffer_size", 100)
+	viper.SetDefault("websocket.batch_size", 10)
+	viper.SetDefault("websocket.flush_interval", "5s")
+	viper.SetDefault("websocket.max_retries", 3)
+	viper.SetDefault("websocket.retry_delay", "2s")
+	viper.SetDefault("websocket.subscribe_to_blocks", true)
+	viper.SetDefault("websocket.subscribe_to_txs", false)
+	viper.SetDefault("websocket.subscribe_to_logs", false)
+	viper.SetDefault("websocket.health_check_interval", "30s")
+
 	// NATS defaults
 	viper.SetDefault("nats.url", "nats://localhost:4222")
 	viper.SetDefault("nats.stream_name", "TRANSACTIONS")
@@ -253,6 +270,22 @@ func bindEnvVars() {
 	// Monitoring
 	viper.BindEnv("monitoring.metrics_enabled", "METRICS_ENABLED")
 	viper.BindEnv("monitoring.health_check_interval", "HEALTH_CHECK_INTERVAL")
+
+	// WebSocket
+	viper.BindEnv("websocket.reconnect_attempts", "WEBSOCKET_RECONNECT_ATTEMPTS")
+	viper.BindEnv("websocket.reconnect_delay", "WEBSOCKET_RECONNECT_DELAY")
+	viper.BindEnv("websocket.ping_interval", "WEBSOCKET_PING_INTERVAL")
+	viper.BindEnv("websocket.read_timeout", "WEBSOCKET_READ_TIMEOUT")
+	viper.BindEnv("websocket.write_timeout", "WEBSOCKET_WRITE_TIMEOUT")
+	viper.BindEnv("websocket.buffer_size", "WEBSOCKET_BUFFER_SIZE")
+	viper.BindEnv("websocket.batch_size", "WEBSOCKET_BATCH_SIZE")
+	viper.BindEnv("websocket.flush_interval", "WEBSOCKET_FLUSH_INTERVAL")
+	viper.BindEnv("websocket.max_retries", "WEBSOCKET_MAX_RETRIES")
+	viper.BindEnv("websocket.retry_delay", "WEBSOCKET_RETRY_DELAY")
+	viper.BindEnv("websocket.subscribe_to_blocks", "WEBSOCKET_SUBSCRIBE_TO_BLOCKS")
+	viper.BindEnv("websocket.subscribe_to_txs", "WEBSOCKET_SUBSCRIBE_TO_TXS")
+	viper.BindEnv("websocket.subscribe_to_logs", "WEBSOCKET_SUBSCRIBE_TO_LOGS")
+	viper.BindEnv("websocket.health_check_interval", "WEBSOCKET_HEALTH_CHECK_INTERVAL")
 
 	// NATS
 	viper.BindEnv("nats.url", "NATS_URL")
