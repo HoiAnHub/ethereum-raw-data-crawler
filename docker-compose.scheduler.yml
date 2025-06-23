@@ -74,6 +74,10 @@ services:
       RETRY_ATTEMPTS: 3
       RETRY_DELAY: 3s
 
+      # Batch Upsert Configuration - Enable duplicate handling
+      CRAWLER_USE_UPSERT: ${CRAWLER_USE_UPSERT:-true}
+      CRAWLER_UPSERT_FALLBACK: ${CRAWLER_UPSERT_FALLBACK:-true}
+
       # Rate limiting for Infura API
       ETHEREUM_RATE_LIMIT: ${ETHEREUM_RATE_LIMIT:-1s}
       ETHEREUM_REQUEST_TIMEOUT: ${ETHEREUM_REQUEST_TIMEOUT:-120s}
