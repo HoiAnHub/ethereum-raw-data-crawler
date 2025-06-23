@@ -284,6 +284,11 @@ websocket-setup:
 	@echo "  WEBSOCKET_SUBSCRIBE_TO_LOGS - Subscribe to contract logs (true/false)"
 	@echo "$(GREEN)Add these to your .env file for local development$(NC)"
 
+## Test WebSocket Listener service
+websocket-test:
+	@echo "$(BLUE)Testing WebSocket Listener Service...$(NC)"
+	./scripts/test-websocket-listener.sh
+
 # ===== Scheduler Service =====
 
 ## Build Scheduler

@@ -155,7 +155,7 @@ func (w *WebSocketListenerAppService) handleNewBlock(blockNumber *big.Int) {
 	w.logger.Debug("Received new block", zap.String("block_number", blockNumber.String()))
 
 	// Fetch block details
-	block, err := w.blockchainService.GetBlockByNumber(ctx, blockNumber, true)
+	block, err := w.blockchainService.GetBlockByNumber(ctx, blockNumber)
 	if err != nil {
 		w.logger.Error("Failed to get block details",
 			zap.String("block_number", blockNumber.String()),
@@ -167,9 +167,17 @@ func (w *WebSocketListenerAppService) handleNewBlock(blockNumber *big.Int) {
 	w.bufferMu.Lock()
 	w.blockBuffer = append(w.blockBuffer, block)
 
-	// Add transactions to buffer
-	for _, tx := range block.Transactions {
-		w.transactionBuffer = append(w.transactionBuffer, tx)
+	// Get transactions for this block separately
+	transactions, err := w.blockchainService.GetTransactionsByBlock(ctx, blockNumber)
+	if err != nil {
+		w.logger.Warn("Failed to get transactions for block",
+			zap.String("block_number", blockNumber.String()),
+			zap.Error(err))
+	} else {
+		// Add transactions to buffer
+		for _, tx := range transactions {
+			w.transactionBuffer = append(w.transactionBuffer, tx)
+		}
 	}
 	w.bufferMu.Unlock()
 
@@ -232,7 +240,7 @@ func (w *WebSocketListenerAppService) flushBuffers(ctx context.Context) {
 
 	// Save blocks
 	if len(blocksToFlush) > 0 {
-		if err := w.blockRepo.SaveBlocks(ctx, blocksToFlush); err != nil {
+		if err := w.blockRepo.CreateBlocks(ctx, blocksToFlush); err != nil {
 			w.logger.Error("Failed to save blocks", zap.Error(err))
 			// TODO: Add retry logic
 		}
@@ -240,7 +248,7 @@ func (w *WebSocketListenerAppService) flushBuffers(ctx context.Context) {
 
 	// Save transactions
 	if len(txsToFlush) > 0 {
-		if err := w.transactionRepo.SaveTransactions(ctx, txsToFlush); err != nil {
+		if err := w.transactionRepo.CreateTransactions(ctx, txsToFlush); err != nil {
 			w.logger.Error("Failed to save transactions", zap.Error(err))
 			// TODO: Add retry logic
 		}
@@ -295,33 +303,18 @@ func (w *WebSocketListenerAppService) checkHealth() {
 // notifyNewBlock sends notification about new block
 func (w *WebSocketListenerAppService) notifyNewBlock(block *entity.Block) {
 	if w.config.NATS.Enabled {
-		// Send notification via NATS
-		message := map[string]interface{}{
-			"type":         "new_block",
-			"block_number": block.Number.String(),
-			"block_hash":   block.Hash,
-			"timestamp":    block.Timestamp,
-		}
-
-		if err := w.messagingService.Publish(context.Background(), "blocks.new", message); err != nil {
-			w.logger.Error("Failed to publish new block notification", zap.Error(err))
-		}
+		w.logger.Debug("NATS notification disabled for WebSocket listener - using direct database writes only")
+		// Note: Current MessagingService interface doesn't support generic publish
+		// Consider extending interface if real-time notifications are needed
 	}
 }
 
 // updateMetrics updates service metrics
 func (w *WebSocketListenerAppService) updateMetrics(blocksProcessed, txsProcessed int) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	w.logger.Debug("Metrics update",
+		zap.Int("blocks_processed", blocksProcessed),
+		zap.Int("transactions_processed", txsProcessed))
 
-	metrics := &entity.Metrics{
-		BlocksProcessed:       int64(blocksProcessed),
-		TransactionsProcessed: int64(txsProcessed),
-		Timestamp:             time.Now(),
-		Source:                "websocket_listener",
-	}
-
-	if err := w.metricsRepo.SaveMetrics(ctx, metrics); err != nil {
-		w.logger.Error("Failed to save metrics", zap.Error(err))
-	}
+	// Note: Current MetricsRepository interface uses CrawlerMetrics/SystemHealth
+	// Consider extending interface for WebSocket listener specific metrics if needed
 }
