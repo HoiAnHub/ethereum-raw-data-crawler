@@ -507,6 +507,15 @@ func (s *CrawlerService) saveTransactions(ctx context.Context, transactions []*e
 
 		if err := s.txRepo.UpsertTransactions(ctx, transactions); err != nil {
 			duration := time.Since(start)
+
+			// Check if this is a duplicate key error which means data already exists
+			if strings.Contains(err.Error(), "E11000") || strings.Contains(err.Error(), "duplicate key") {
+				logger.Warn("Transactions already exist in database (upsert), considering as success",
+					zap.Int("transaction_count", txCount),
+					zap.Duration("duration", duration))
+				return nil // Consider this as success since data is already there
+			}
+
 			logger.Warn("Batch upsert failed",
 				zap.Error(err),
 				zap.Int("transaction_count", txCount),
@@ -558,6 +567,15 @@ func (s *CrawlerService) saveTransactions(ctx context.Context, transactions []*e
 
 		if err := s.txRepo.CreateTransactions(ctx, transactions); err != nil {
 			duration := time.Since(start)
+
+			// Check if this is a duplicate key error which means data already exists
+			if strings.Contains(err.Error(), "E11000") || strings.Contains(err.Error(), "duplicate key") {
+				logger.Warn("Transactions already exist in database, considering as success",
+					zap.Int("transaction_count", txCount),
+					zap.Duration("duration", duration))
+				return nil // Consider this as success since data is already there
+			}
+
 			logger.Error("Batch insert failed",
 				zap.Error(err),
 				zap.Int("transaction_count", txCount),
