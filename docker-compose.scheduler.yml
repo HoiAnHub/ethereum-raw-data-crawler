@@ -12,6 +12,8 @@ services:
       MONGO_INITDB_DATABASE: ethereum_raw_data
     ports:
       - "27017:27017"
+    command:
+      - "--bind_ip_all"
     volumes:
       - mongodb_data:/data/db
       - ./scripts/mongo-init.js:/docker-entrypoint-initdb.d/mongo-init.js:ro
