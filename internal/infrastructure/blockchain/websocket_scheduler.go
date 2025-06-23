@@ -204,24 +204,33 @@ func (w *WebSocketScheduler) messageListener(ctx context.Context) {
 
 		if running {
 			w.logger.Info("Scheduler still running, attempting to restart message listener")
-			// Wait a bit before restarting to avoid tight restart loops
-			time.Sleep(2 * time.Second)
 
-			select {
-			case <-w.stopChan:
-				w.logger.Info("Stop signal received during restart attempt")
-				return
-			case <-ctx.Done():
-				w.logger.Info("Context cancelled during restart attempt")
-				return
-			default:
-				w.logger.Info("Restarting message listener")
-				go w.messageListener(ctx)
-			}
+			// Use a goroutine for restart to avoid blocking
+			go func() {
+				// Wait a bit before restarting to avoid tight restart loops
+				restartTimer := time.NewTimer(2 * time.Second)
+				defer restartTimer.Stop()
+
+				select {
+				case <-w.stopChan:
+					w.logger.Info("Stop signal received during restart attempt")
+					return
+				case <-ctx.Done():
+					w.logger.Info("Context cancelled during restart attempt")
+					return
+				case <-restartTimer.C:
+					w.logger.Info("Restarting message listener")
+					go w.messageListener(ctx)
+				}
+			}()
 		}
 	}()
 
 	w.logger.Info("Message listener started")
+
+	// Create a ticker for periodic checks to avoid tight loops
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
 
 	for {
 		select {
@@ -231,7 +240,7 @@ func (w *WebSocketScheduler) messageListener(ctx context.Context) {
 		case <-ctx.Done():
 			w.logger.Info("Message listener context cancelled")
 			return
-		default:
+		case <-ticker.C:
 			w.mu.RLock()
 			conn := w.conn
 			running := w.isRunning
@@ -244,12 +253,11 @@ func (w *WebSocketScheduler) messageListener(ctx context.Context) {
 
 			if conn == nil {
 				w.logger.Debug("No WebSocket connection, waiting...")
-				time.Sleep(1 * time.Second)
 				continue
 			}
 
 			// Set read deadline to prevent hanging
-			conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+			conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 
 			var message map[string]interface{}
 			if err := conn.ReadJSON(&message); err != nil {
@@ -263,7 +271,7 @@ func (w *WebSocketScheduler) messageListener(ctx context.Context) {
 					w.logger.Error("Failed to read WebSocket message", zap.Error(err))
 				}
 
-				// Trigger reconnection for any error
+				// Trigger reconnection for any error (non-blocking)
 				select {
 				case w.reconnectCh <- struct{}{}:
 					w.logger.Info("Triggered WebSocket reconnection")
@@ -425,6 +433,14 @@ func (w *WebSocketScheduler) handleReconnection(ctx context.Context) {
 	// Retry connection with exponential backoff
 	maxRetries := 10 // Increased retries
 	for attempt := 1; attempt <= maxRetries; attempt++ {
+		// Check context and running state
+		select {
+		case <-ctx.Done():
+			w.logger.Info("Context cancelled during reconnection")
+			return
+		default:
+		}
+
 		if !w.isRunning {
 			w.logger.Info("Scheduler stopped during reconnection")
 			return
@@ -440,7 +456,20 @@ func (w *WebSocketScheduler) handleReconnection(ctx context.Context) {
 			zap.Int("max_retries", maxRetries),
 			zap.Duration("backoff", backoff))
 
-		time.Sleep(backoff)
+		// Use timer instead of sleep to respect context cancellation
+		backoffTimer := time.NewTimer(backoff)
+		select {
+		case <-ctx.Done():
+			backoffTimer.Stop()
+			w.logger.Info("Context cancelled during backoff")
+			return
+		case <-w.stopChan:
+			backoffTimer.Stop()
+			w.logger.Info("Stop signal received during backoff")
+			return
+		case <-backoffTimer.C:
+			// Continue with reconnection attempt
+		}
 
 		if err := w.connect(ctx); err != nil {
 			w.logger.Error("Reconnection attempt failed",
