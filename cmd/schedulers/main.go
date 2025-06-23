@@ -122,10 +122,15 @@ func registerSchedulerHooks(
 				return err
 			}
 
-			// Connect to messaging service
-			if err := messagingService.Connect(ctx); err != nil {
-				logger.Error("Failed to connect to messaging service", zap.Error(err))
-				return err
+			// Connect to messaging service (only if enabled)
+			if cfg.NATS.Enabled {
+				logger.Info("NATS is enabled, connecting to messaging service")
+				if err := messagingService.Connect(ctx); err != nil {
+					logger.Error("Failed to connect to messaging service", zap.Error(err))
+					return err
+				}
+			} else {
+				logger.Info("NATS is disabled, skipping messaging service connection")
 			}
 
 			// Configure crawler for external scheduler mode
@@ -181,9 +186,11 @@ func registerSchedulerHooks(
 				logger.Error("Error stopping crawler service", zap.Error(err))
 			}
 
-			// Disconnect from messaging service
-			if err := messagingService.Disconnect(); err != nil {
-				logger.Error("Error disconnecting from messaging service", zap.Error(err))
+			// Disconnect from messaging service (only if it was connected)
+			if cfg.NATS.Enabled {
+				if err := messagingService.Disconnect(); err != nil {
+					logger.Error("Error disconnecting from messaging service", zap.Error(err))
+				}
 			}
 
 			// Close database connection

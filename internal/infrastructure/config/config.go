@@ -221,7 +221,7 @@ func setDefaults() {
 	viper.SetDefault("nats.reconnect_attempts", 5)
 	viper.SetDefault("nats.reconnect_delay", "2s")
 	viper.SetDefault("nats.max_pending_messages", 1000)
-	viper.SetDefault("nats.enabled", true)
+	viper.SetDefault("nats.enabled", false)
 }
 
 func bindEnvVars() {
