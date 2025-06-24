@@ -57,7 +57,7 @@ services:
     image: ghcr.io/nats-nui/nui:latest
     container_name: ethereum-nats-nui
     ports:
-      - "31311:31311"
+      - "0.0.0.0:31311:31311"
     environment:
       NATS_URL: nats://ethereum-nats:4222
     volumes:

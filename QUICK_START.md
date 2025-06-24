@@ -77,15 +77,26 @@ make -f Makefile.nats subscribe-test
 
 ### NATS Monitoring
 - **NATS Web UI**: http://localhost:8222
-- **NATS NUI (Advanced GUI)**: http://{localhost}/{YOUR_VPS_IP}:31311
+- **NATS NUI (Advanced GUI)**:
+  - Local access: http://localhost:31311
+  - **Remote access (VPS)**: http://45.149.206.55:31311
 - **Stream Name**: `TRANSACTIONS`
 - **Subject**: `transactions.events`
 - **Event Schema**: See [NATS_INTEGRATION.md](NATS_INTEGRATION.md)
 
 **Open NATS NUI:**
 ```bash
+# Local access
 make -f Makefile.nats nats-ui
+
+# Remote access (from any machine)
+# Open browser and navigate to: http://45.149.206.55:31311
 ```
+
+**🌐 Remote Access Setup:**
+The NUI interface is configured to be accessible from outside the VPS. After running `make -f Makefile.nats full-stack-up`, you can access the NATS NUI from any machine using:
+- **URL**: http://45.149.206.55:31311
+- **No additional configuration needed** - the port is already bound to all interfaces
 
 ## 3️⃣ Development Workflow
 
@@ -247,7 +258,89 @@ make -f Makefile.nats reset-all
 make -f Makefile.nats setup-dev
 ```
 
-## 7️⃣ Available Commands
+## 7️⃣ VPS Deployment with Remote Access 🌐
+
+### Deploy to VPS with Remote NUI Access
+
+**Prerequisites:**
+- VPS with Docker and Docker Compose installed
+- Port 31311 accessible from outside (firewall configured)
+- Your VPS IP: `45.149.206.55`
+
+### Step-by-Step VPS Deployment
+
+```bash
+# Option 1: Automated deployment (RECOMMENDED)
+./scripts/vps-deploy.sh
+
+# Option 2: Manual deployment
+# 1. Clone repository on VPS
+git clone <your-repo-url>
+cd ethereum-raw-data-crawler
+
+# 2. Setup environment
+cp env.example .env
+nano .env  # Configure your settings
+
+# 3. Enable NATS for remote access
+echo "NATS_ENABLED=true" >> .env
+
+# 4. Deploy full stack with remote access
+make -f Makefile.nats full-stack-up
+
+# 5. Verify deployment
+make -f Makefile.nats health-check
+```
+
+### Access NUI from Anywhere
+
+After deployment, you can access the NATS NUI interface from any machine:
+
+- **🌐 Remote Access URL**: http://45.149.206.55:31311
+- **🔧 Local Access (on VPS)**: http://localhost:31311
+
+### Firewall Configuration (if needed)
+
+If you can't access the NUI from outside, ensure port 31311 is open:
+
+```bash
+# Ubuntu/Debian
+sudo ufw allow 31311
+
+# CentOS/RHEL
+sudo firewall-cmd --permanent --add-port=31311/tcp
+sudo firewall-cmd --reload
+
+# Check if port is accessible
+curl -I http://45.149.206.55:31311
+```
+
+### VPS Management Commands
+
+```bash
+# Start full stack with remote access
+make -f Makefile.nats full-stack-up
+
+# Stop all services
+make -f Makefile.nats full-stack-down
+
+# Check service health
+make -f Makefile.nats health-check
+
+# View logs
+make -f Makefile.nats crawler-logs
+
+# Monitor NATS metrics
+make -f Makefile.nats monitor
+```
+
+### Security Considerations
+
+- **Default Configuration**: NUI is accessible to anyone who can reach port 31311
+- **Production Recommendation**: Consider using a reverse proxy with authentication
+- **Network Security**: Ensure your VPS firewall is properly configured
+
+## 8️⃣ Available Commands
 
 ### Basic Crawler Commands
 ```bash
@@ -278,9 +371,10 @@ make -f Makefile.nats teardown      # Stop everything
 ./scripts/deploy.sh check    # Check status and environment
 ./scripts/deploy.sh logs     # Show logs
 ./scripts/deploy.sh stop     # Stop services
+./scripts/vps-deploy.sh      # VPS deployment with remote NUI access
 ```
 
-## 8️⃣ Environment Configuration
+## 9️⃣ Environment Configuration
 
 ### Basic Configuration (.env)
 ```bash
@@ -363,6 +457,7 @@ make -f Makefile.nats publish-test
 - **Use `make -f Makefile.nats setup-dev` for complete development setup**
 - **Monitor transaction events with the consumer example**
 - **Check health status before and after deployments**
+- **For VPS deployment: Access NUI at http://45.149.206.55:31311**
 
 ## 🔗 Documentation Links
 
@@ -377,3 +472,4 @@ make -f Makefile.nats publish-test
 2. **NATS Issues**: Check [NATS_INTEGRATION.md](NATS_INTEGRATION.md)
 3. **Environment Issues**: Run `make env-check-full`
 4. **NATS Issues**: Run `make -f Makefile.nats health-check`
+5. **VPS Access Issues**: Check firewall and port 31311 accessibility
