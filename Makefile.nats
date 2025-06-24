@@ -103,7 +103,6 @@ consumer-create-workqueue: ## Create a consumer suitable for WorkQueue streams
 	@echo "Creating WorkQueue consumer: $(CONSUMER_NAME)"
 	docker exec ethereum-nats-box nats consumer add $(STREAM_NAME) $(CONSUMER_NAME) \
 		--deliver=all \
-		--filter "$(SUBJECT_PREFIX).events" \
 		--ack explicit \
 		--max-deliver 3 \
 		--wait 30s \
