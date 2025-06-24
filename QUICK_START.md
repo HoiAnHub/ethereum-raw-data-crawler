@@ -77,7 +77,7 @@ make -f Makefile.nats subscribe-test
 
 ### NATS Monitoring
 - **NATS Web UI**: http://localhost:8222
-- **NATS NUI (Advanced GUI)**: http://localhost:31311
+- **NATS NUI (Advanced GUI)**: http://{localhost}/{YOUR_VPS_IP}:31311
 - **Stream Name**: `TRANSACTIONS`
 - **Subject**: `transactions.events`
 - **Event Schema**: See [NATS_INTEGRATION.md](NATS_INTEGRATION.md)
