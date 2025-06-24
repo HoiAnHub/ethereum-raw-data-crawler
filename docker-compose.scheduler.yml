@@ -21,6 +21,7 @@ services:
       - ./scripts/mongo-init.js:/docker-entrypoint-initdb.d/mongo-init.js:ro
     networks:
       - ethereum-scheduler-network
+      - ethereum-network
     healthcheck:
       test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')", "--quiet"]
       interval: 10s
@@ -93,7 +94,7 @@ services:
       SCHEDULER_RECONNECT_DELAY: ${SCHEDULER_RECONNECT_DELAY:-5s}
 
       # NATS JetStream Configuration (Disabled by default for scheduler)
-      NATS_URL: ${NATS_URL:-nats://localhost:4222}
+      NATS_URL: ${NATS_URL:-nats://ethereum-nats:4222}
       NATS_STREAM_NAME: ${NATS_STREAM_NAME:-TRANSACTIONS}
       NATS_SUBJECT_PREFIX: ${NATS_SUBJECT_PREFIX:-transactions}
       NATS_CONNECT_TIMEOUT: ${NATS_CONNECT_TIMEOUT:-10s}
@@ -107,6 +108,7 @@ services:
       HEALTH_CHECK_INTERVAL: 30s
     networks:
       - ethereum-scheduler-network
+      - ethereum-network
     healthcheck:
       test: ["CMD", "ps", "aux"]
       interval: 30s
@@ -134,3 +136,6 @@ volumes:
 networks:
   ethereum-scheduler-network:
     driver: bridge
+  ethereum-network:
+    external: true
+    name: ethereum-raw-data-crawler_ethereum-network

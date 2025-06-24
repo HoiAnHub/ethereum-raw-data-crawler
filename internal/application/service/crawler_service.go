@@ -493,13 +493,8 @@ func (s *CrawlerService) saveTransactions(ctx context.Context, transactions []*e
 	start := time.Now()
 	txCount := len(transactions)
 
-	// Publish transactions to NATS JetStream before saving to MongoDB
-	if err := s.publishTransactions(ctx, transactions, logger); err != nil {
-		logger.Warn("Failed to publish transactions to messaging service",
-			zap.Error(err),
-			zap.Int("transaction_count", txCount))
-		// Continue with database save even if messaging fails
-	}
+	var dbSaveSuccessful bool
+	var dbSaveError error
 
 	if s.config.Crawler.UseUpsert {
 		// Try upsert first
@@ -513,54 +508,57 @@ func (s *CrawlerService) saveTransactions(ctx context.Context, transactions []*e
 				logger.Warn("Transactions already exist in database (upsert), considering as success",
 					zap.Int("transaction_count", txCount),
 					zap.Duration("duration", duration))
-				return nil // Consider this as success since data is already there
-			}
+				dbSaveSuccessful = true // Consider this as success since data is already there
+			} else {
+				logger.Warn("Batch upsert failed",
+					zap.Error(err),
+					zap.Int("transaction_count", txCount),
+					zap.Duration("duration", duration))
 
-			logger.Warn("Batch upsert failed",
-				zap.Error(err),
-				zap.Int("transaction_count", txCount),
-				zap.Duration("duration", duration))
+				// Fallback to insert if configured
+				if s.config.Crawler.UpsertFallback {
+					logger.Info("Falling back to batch insert", zap.Int("transaction_count", txCount))
+					fallbackStart := time.Now()
 
-			// Fallback to insert if configured
-			if s.config.Crawler.UpsertFallback {
-				logger.Info("Falling back to batch insert", zap.Int("transaction_count", txCount))
-				fallbackStart := time.Now()
+					if insertErr := s.txRepo.CreateTransactions(ctx, transactions); insertErr != nil {
+						fallbackDuration := time.Since(fallbackStart)
 
-				if insertErr := s.txRepo.CreateTransactions(ctx, transactions); insertErr != nil {
-					fallbackDuration := time.Since(fallbackStart)
-
-					// Check if this is a duplicate key error which means data already exists
-					if strings.Contains(insertErr.Error(), "E11000") || strings.Contains(insertErr.Error(), "duplicate key") {
-						logger.Warn("Transactions already exist in database, considering as success",
+						// Check if this is a duplicate key error which means data already exists
+						if strings.Contains(insertErr.Error(), "E11000") || strings.Contains(insertErr.Error(), "duplicate key") {
+							logger.Warn("Transactions already exist in database, considering as success",
+								zap.Int("transaction_count", txCount),
+								zap.Duration("fallback_duration", fallbackDuration),
+								zap.Duration("total_duration", time.Since(start)))
+							dbSaveSuccessful = true // Consider this as success since data is already there
+						} else {
+							logger.Error("Fallback batch insert also failed",
+								zap.Error(insertErr),
+								zap.Int("transaction_count", txCount),
+								zap.Duration("fallback_duration", fallbackDuration),
+								zap.Duration("total_duration", time.Since(start)))
+							dbSaveError = fmt.Errorf("both upsert and insert failed: upsert=%w, insert=%w", err, insertErr)
+							dbSaveSuccessful = false
+						}
+					} else {
+						fallbackDuration := time.Since(fallbackStart)
+						logger.Info("Fallback batch insert succeeded",
 							zap.Int("transaction_count", txCount),
 							zap.Duration("fallback_duration", fallbackDuration),
 							zap.Duration("total_duration", time.Since(start)))
-						return nil // Consider this as success since data is already there
+						dbSaveSuccessful = true
 					}
-
-					logger.Error("Fallback batch insert also failed",
-						zap.Error(insertErr),
-						zap.Int("transaction_count", txCount),
-						zap.Duration("fallback_duration", fallbackDuration),
-						zap.Duration("total_duration", time.Since(start)))
-					return fmt.Errorf("both upsert and insert failed: upsert=%w, insert=%w", err, insertErr)
+				} else {
+					dbSaveError = err
+					dbSaveSuccessful = false
 				}
-
-				fallbackDuration := time.Since(fallbackStart)
-				logger.Info("Fallback batch insert succeeded",
-					zap.Int("transaction_count", txCount),
-					zap.Duration("fallback_duration", fallbackDuration),
-					zap.Duration("total_duration", time.Since(start)))
-				return nil
 			}
-			return err
+		} else {
+			duration := time.Since(start)
+			logger.Debug("Batch upsert succeeded",
+				zap.Int("transaction_count", txCount),
+				zap.Duration("duration", duration))
+			dbSaveSuccessful = true
 		}
-
-		duration := time.Since(start)
-		logger.Debug("Batch upsert succeeded",
-			zap.Int("transaction_count", txCount),
-			zap.Duration("duration", duration))
-		return nil
 	} else {
 		// Use traditional insert
 		logger.Debug("Attempting batch insert", zap.Int("transaction_count", txCount))
@@ -573,22 +571,43 @@ func (s *CrawlerService) saveTransactions(ctx context.Context, transactions []*e
 				logger.Warn("Transactions already exist in database, considering as success",
 					zap.Int("transaction_count", txCount),
 					zap.Duration("duration", duration))
-				return nil // Consider this as success since data is already there
+				dbSaveSuccessful = true // Consider this as success since data is already there
+			} else {
+				logger.Error("Batch insert failed",
+					zap.Error(err),
+					zap.Int("transaction_count", txCount),
+					zap.Duration("duration", duration))
+				dbSaveError = err
+				dbSaveSuccessful = false
 			}
-
-			logger.Error("Batch insert failed",
-				zap.Error(err),
+		} else {
+			duration := time.Since(start)
+			logger.Debug("Batch insert succeeded",
 				zap.Int("transaction_count", txCount),
 				zap.Duration("duration", duration))
-			return err
+			dbSaveSuccessful = true
 		}
-
-		duration := time.Since(start)
-		logger.Debug("Batch insert succeeded",
-			zap.Int("transaction_count", txCount),
-			zap.Duration("duration", duration))
-		return nil
 	}
+
+	// Publish transactions to NATS JetStream ONLY AFTER successful DB save
+	if dbSaveSuccessful {
+		if err := s.publishTransactions(ctx, transactions, logger); err != nil {
+			logger.Warn("Failed to publish transactions to messaging service after successful DB save",
+				zap.Error(err),
+				zap.Int("transaction_count", txCount))
+			// Don't return error here since DB save was successful
+			// Messaging failure shouldn't block the crawler
+		} else {
+			logger.Debug("Successfully published transactions to messaging service after DB save",
+				zap.Int("transaction_count", txCount))
+		}
+	} else {
+		logger.Debug("Skipping transaction publishing due to DB save failure",
+			zap.Int("transaction_count", txCount))
+	}
+
+	// Return the DB save result
+	return dbSaveError
 }
 
 // publishTransactions publishes transactions to messaging service

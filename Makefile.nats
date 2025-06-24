@@ -1,0 +1,213 @@
+# NATS JetStream Management Makefile
+
+# Variables
+NATS_URL ?= nats://localhost:4222
+STREAM_NAME ?= TRANSACTIONS
+SUBJECT_PREFIX ?= transactions
+CONSUMER_NAME ?= example-consumer
+
+.PHONY: help
+help: ## Show this help message
+	@echo "NATS JetStream Management Commands:"
+	@echo ""
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
+	@echo ""
+	@echo "Variables:"
+	@echo "  NATS_URL=$(NATS_URL)"
+	@echo "  STREAM_NAME=$(STREAM_NAME)"
+	@echo "  SUBJECT_PREFIX=$(SUBJECT_PREFIX)"
+	@echo "  CONSUMER_NAME=$(CONSUMER_NAME)"
+
+.PHONY: nats-up
+nats-up: ## Start NATS server using Docker Compose
+	@echo "Starting NATS JetStream server..."
+	docker-compose -f docker-compose.nats.yml up -d
+	@echo "Waiting for NATS to be ready..."
+	@sleep 5
+	@echo "NATS server started at $(NATS_URL)"
+	@echo "Monitor UI available at http://localhost:8222"
+	@echo "NATS NUI available at http://localhost:31311"
+
+.PHONY: nats-down
+nats-down: ## Stop NATS server
+	@echo "Stopping NATS JetStream server..."
+	docker-compose -f docker-compose.nats.yml down
+
+.PHONY: nats-logs
+nats-logs: ## Show NATS server logs
+	docker-compose -f docker-compose.nats.yml logs -f nats
+
+.PHONY: nats-status
+nats-status: ## Check NATS server status
+	@echo "Checking NATS server status..."
+	@curl -s http://localhost:8222/ | jq . || echo "NATS server not responding"
+	@echo ""
+	@docker-compose -f docker-compose.nats.yml ps
+
+.PHONY: nats-shell
+nats-shell: ## Access NATS management shell
+	@echo "Entering NATS management shell..."
+	docker exec -it ethereum-nats-box sh
+
+.PHONY: nats-ui
+nats-ui: ## Open NATS NUI in browser
+	@echo "Opening NATS NUI in browser..."
+	@which open >/dev/null 2>&1 && open http://localhost:31311 || echo "Please open http://localhost:31311 in your browser"
+
+.PHONY: stream-create
+stream-create: ## Create TRANSACTIONS stream
+	@echo "Creating JetStream stream: $(STREAM_NAME)"
+	docker exec ethereum-nats-box nats stream add $(STREAM_NAME) \
+		--subjects "$(SUBJECT_PREFIX).events" \
+		--storage file \
+		--retention work \
+		--max-msgs 1000000 \
+		--max-bytes 1GB \
+		--max-age 24h \
+		--dupe-window 5m \
+		--replicas 1 \
+		--defaults
+
+.PHONY: stream-info
+stream-info: ## Show stream information
+	@echo "Stream information for $(STREAM_NAME):"
+	docker exec ethereum-nats-box nats stream info $(STREAM_NAME)
+
+.PHONY: stream-delete
+stream-delete: ## Delete stream (DANGER!)
+	@echo "WARNING: This will delete stream $(STREAM_NAME) and all its data!"
+	@read -p "Are you sure? (y/N): " confirm && [ "$$confirm" = "y" ]
+	docker exec ethereum-nats-box nats stream rm $(STREAM_NAME) -f
+
+.PHONY: stream-backup
+stream-backup: ## Backup stream data
+	@echo "Backing up stream $(STREAM_NAME)..."
+	mkdir -p ./backups
+	docker exec ethereum-nats-box nats stream backup $(STREAM_NAME) /tmp/backup-$(shell date +%Y%m%d_%H%M%S)
+	docker cp ethereum-nats-box:/tmp/backup-$(shell date +%Y%m%d_%H%M%S) ./backups/
+
+.PHONY: consumer-create
+consumer-create: ## Create a test consumer
+	@echo "Creating consumer: $(CONSUMER_NAME)"
+	docker exec ethereum-nats-box nats consumer add $(STREAM_NAME) $(CONSUMER_NAME) \
+		--filter "$(SUBJECT_PREFIX).events" \
+		--ack explicit \
+		--max-deliver 3 \
+		--wait 30s \
+		--replay instant \
+		--pull \
+		--defaults
+
+.PHONY: consumer-info
+consumer-info: ## Show consumer information
+	@echo "Consumer information for $(CONSUMER_NAME):"
+	docker exec ethereum-nats-box nats consumer info $(STREAM_NAME) $(CONSUMER_NAME)
+
+.PHONY: consumer-read
+consumer-read: ## Read messages from consumer
+	@echo "Reading messages from consumer: $(CONSUMER_NAME)"
+	docker exec ethereum-nats-box nats consumer next $(STREAM_NAME) $(CONSUMER_NAME) --count 10
+
+.PHONY: consumer-delete
+consumer-delete: ## Delete consumer
+	@echo "Deleting consumer: $(CONSUMER_NAME)"
+	docker exec ethereum-nats-box nats consumer rm $(STREAM_NAME) $(CONSUMER_NAME) -f
+
+.PHONY: consumer-reset
+consumer-reset: ## Reset consumer to start from beginning
+	@echo "Resetting consumer $(CONSUMER_NAME) to start from beginning..."
+	$(MAKE) consumer-delete CONSUMER_NAME=$(CONSUMER_NAME)
+	$(MAKE) consumer-create CONSUMER_NAME=$(CONSUMER_NAME)
+
+.PHONY: publish-test
+publish-test: ## Publish a test transaction event
+	@echo "Publishing test transaction event..."
+	docker exec ethereum-nats-box nats pub "$(SUBJECT_PREFIX).events" \
+		'{"hash":"0xtest123","from":"0xabc","to":"0xdef","value":"1000000000000000000","block_number":"123","network":"test","timestamp":"$(shell date -u +%Y-%m-%dT%H:%M:%SZ)"}'
+
+.PHONY: subscribe-test
+subscribe-test: ## Subscribe to transaction events (for testing)
+	@echo "Subscribing to $(SUBJECT_PREFIX).events (Press Ctrl+C to stop)..."
+	docker exec ethereum-nats-box nats sub "$(SUBJECT_PREFIX).events"
+
+.PHONY: monitor
+monitor: ## Monitor stream and consumer metrics
+	@echo "=== Stream Metrics ==="
+	docker exec ethereum-nats-box nats stream info $(STREAM_NAME)
+	@echo ""
+	@echo "=== Consumer Metrics ==="
+	docker exec ethereum-nats-box nats consumer ls $(STREAM_NAME)
+
+.PHONY: run-consumer
+run-consumer: ## Run the example Go consumer
+	@echo "Starting example consumer..."
+	@echo "Make sure NATS is running and stream exists"
+	cd examples && NATS_URL=$(NATS_URL) go run nats_consumer.go
+
+.PHONY: setup-dev
+setup-dev: nats-up stream-create consumer-create ## Setup complete development environment
+	@echo "Development environment setup complete!"
+	@echo ""
+	@echo "You can now:"
+	@echo "  - Run crawler with NATS_ENABLED=true"
+	@echo "  - Test with: make publish-test"
+	@echo "  - Monitor with: make monitor"
+	@echo "  - Run consumer: make run-consumer"
+
+.PHONY: teardown
+teardown: nats-down ## Teardown all NATS resources
+	@echo "NATS environment teardown complete!"
+
+.PHONY: reset-all
+reset-all: ## Reset everything (DANGER!)
+	@echo "WARNING: This will reset all NATS data!"
+	@read -p "Are you sure? (y/N): " confirm && [ "$$confirm" = "y" ]
+	$(MAKE) nats-down
+	docker volume rm ethereum-raw-data-crawler_nats_data || true
+	$(MAKE) setup-dev
+
+.PHONY: crawler-start
+crawler-start: ## Start crawler with NATS enabled
+	@echo "Starting Ethereum crawler with NATS enabled..."
+	NATS_ENABLED=true docker-compose -f docker-compose.scheduler.yml up -d
+
+.PHONY: crawler-logs
+crawler-logs: ## Show crawler logs
+	docker-compose -f docker-compose.scheduler.yml logs -f
+
+.PHONY: crawler-stop
+crawler-stop: ## Stop crawler
+	docker-compose -f docker-compose.scheduler.yml down
+
+.PHONY: full-stack-up
+full-stack-up: nats-up stream-create crawler-start ## Start full stack (NATS + Crawler)
+	@echo "Full stack started!"
+	@echo "NATS Monitor: http://localhost:8222"
+	@echo "NATS NUI: http://localhost:31311"
+	@echo "Check logs: make crawler-logs"
+
+.PHONY: full-stack-down
+full-stack-down: crawler-stop nats-down ## Stop full stack
+	@echo "Full stack stopped!"
+
+.PHONY: health-check
+health-check: ## Check health of all services
+	@echo "=== NATS Health ==="
+	@curl -s http://localhost:8222/ > /dev/null && echo "✅ NATS: OK" || echo "❌ NATS: DOWN"
+	@echo ""
+	@echo "=== Stream Health ==="
+	@docker exec ethereum-nats-box nats stream info $(STREAM_NAME) > /dev/null 2>&1 && echo "✅ Stream: OK" || echo "❌ Stream: NOT FOUND"
+	@echo ""
+	@echo "=== Crawler Health ==="
+	@docker-compose -f docker-compose.scheduler.yml ps | grep -q "Up" && echo "✅ Crawler: RUNNING" || echo "❌ Crawler: STOPPED"
+
+.PHONY: benchmark
+benchmark: ## Run basic performance benchmark
+	@echo "Running NATS performance benchmark..."
+	docker exec ethereum-nats-box nats bench "$(SUBJECT_PREFIX).events" --msgs 1000 --size 512
+
+.PHONY: clean
+clean: ## Clean up Docker resources
+	@echo "Cleaning up Docker resources..."
+	docker system prune -f
+	docker volume prune -f

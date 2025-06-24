@@ -1,0 +1,87 @@
+version: '3.8'
+
+services:
+  # NATS JetStream Server
+  nats:
+    image: nats:2.10-alpine
+    container_name: ethereum-nats
+    ports:
+      - "4222:4222"  # NATS client connections
+      - "8222:8222"  # NATS monitoring/management
+      - "6222:6222"  # NATS cluster routing
+    command:
+      - "-js"              # Enable JetStream
+      - "-m=8222"          # Enable monitoring on port 8222
+      - "-DV"              # Enable debug and verbose logging
+      - "--store_dir=/data" # JetStream storage directory
+    volumes:
+      - nats_data:/data
+    environment:
+      - NATS_DEBUG=true
+    networks:
+      - ethereum-network
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8222/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.5'
+        reservations:
+          memory: 128M
+          cpus: '0.25'
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # NATS Management UI (Optional)
+  nats-box:
+    image: natsio/nats-box:latest
+    container_name: ethereum-nats-box
+    networks:
+      - ethereum-network
+    depends_on:
+      - nats
+    entrypoint: ["tail", "-f", "/dev/null"]  # Keep container running for CLI access
+    environment:
+      - NATS_URL=nats://nats:4222
+
+  # NATS NUI - Advanced GUI Management
+  nats-nui:
+    image: ghcr.io/nats-nui/nui:latest
+    container_name: ethereum-nats-nui
+    ports:
+      - "31311:31311"
+    environment:
+      NATS_URL: nats://ethereum-nats:4222
+    volumes:
+      - nats_nui_data:/db
+    depends_on:
+      - nats
+    networks:
+      - ethereum-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: '0.25'
+        reservations:
+          memory: 64M
+          cpus: '0.1'
+
+volumes:
+  nats_data:
+    driver: local
+  nats_nui_data:
+    driver: local
+
+networks:
+  ethereum-network:
+    driver: bridge
