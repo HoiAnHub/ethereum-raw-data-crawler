@@ -26,6 +26,8 @@ type WebSocketScheduler struct {
 	subID           string
 	reconnectCh     chan struct{}
 	lastMessageTime time.Time
+	schedulerCtx    context.Context    // Context riêng cho scheduler
+	schedulerCancel context.CancelFunc // Cancel function cho scheduler context
 }
 
 // NewWebSocketScheduler creates a new WebSocket scheduler
@@ -50,14 +52,18 @@ func (w *WebSocketScheduler) Start(ctx context.Context) error {
 
 	w.logger.Info("Starting WebSocket scheduler", zap.String("ws_url", w.config.WSURL))
 
+	// Tạo context riêng cho scheduler, không phụ thuộc vào context từ bên ngoài
+	w.schedulerCtx, w.schedulerCancel = context.WithCancel(context.Background())
+
 	if err := w.connect(ctx); err != nil {
+		w.schedulerCancel() // Cancel context nếu connect thất bại
 		return fmt.Errorf("failed to connect to WebSocket: %w", err)
 	}
 
 	w.isRunning = true
 
-	// Start connection monitor
-	go w.connectionMonitor(ctx)
+	// Start connection monitor với scheduler context
+	go w.connectionMonitor(w.schedulerCtx)
 
 	return nil
 }
@@ -72,6 +78,11 @@ func (w *WebSocketScheduler) Stop() error {
 	}
 
 	w.logger.Info("Stopping WebSocket scheduler")
+
+	// Cancel scheduler context trước
+	if w.schedulerCancel != nil {
+		w.schedulerCancel()
+	}
 
 	close(w.stopChan)
 	w.isRunning = false
@@ -111,8 +122,8 @@ func (w *WebSocketScheduler) SubscribeNewBlocks(ctx context.Context, callback fu
 		return fmt.Errorf("failed to subscribe to blocks: %w", err)
 	}
 
-	// Start message listener
-	go w.messageListener(ctx)
+	// Start message listener với scheduler context thay vì context từ tham số
+	go w.messageListener(w.schedulerCtx)
 
 	w.logger.Info("Successfully subscribed to new block events")
 	return nil
@@ -200,9 +211,10 @@ func (w *WebSocketScheduler) messageListener(ctx context.Context) {
 		// Auto-restart message listener if scheduler is still running
 		w.mu.RLock()
 		running := w.isRunning
+		schedulerCtx := w.schedulerCtx
 		w.mu.RUnlock()
 
-		if running {
+		if running && schedulerCtx != nil {
 			w.logger.Info("Scheduler still running, attempting to restart message listener")
 			// Wait a bit before restarting to avoid tight restart loops
 			time.Sleep(2 * time.Second)
@@ -211,12 +223,13 @@ func (w *WebSocketScheduler) messageListener(ctx context.Context) {
 			case <-w.stopChan:
 				w.logger.Info("Stop signal received during restart attempt")
 				return
-			case <-ctx.Done():
-				w.logger.Info("Context cancelled during restart attempt")
+			case <-schedulerCtx.Done():
+				w.logger.Info("Scheduler context cancelled during restart attempt")
 				return
 			default:
 				w.logger.Info("Restarting message listener")
-				go w.messageListener(ctx)
+				// Sử dụng scheduler context thay vì context bị cancel
+				go w.messageListener(schedulerCtx)
 			}
 		}
 	}()
@@ -230,7 +243,20 @@ func (w *WebSocketScheduler) messageListener(ctx context.Context) {
 			return
 		case <-ctx.Done():
 			w.logger.Info("Message listener context cancelled")
-			return
+			// Kiểm tra xem có phải scheduler context bị cancel không
+			w.mu.RLock()
+			schedulerCtx := w.schedulerCtx
+			w.mu.RUnlock()
+
+			if schedulerCtx != nil && schedulerCtx == ctx {
+				// Nếu là scheduler context bị cancel thì dừng hẳn
+				w.logger.Info("Scheduler context cancelled, stopping message listener permanently")
+				return
+			} else {
+				// Nếu chỉ là context từ bên ngoài bị cancel, tiếp tục với scheduler context
+				w.logger.Info("External context cancelled, but scheduler still running - continuing with scheduler context")
+				return // Defer function sẽ restart với scheduler context
+			}
 		default:
 			w.mu.RLock()
 			conn := w.conn
@@ -348,17 +374,24 @@ func (w *WebSocketScheduler) connectionMonitor(ctx context.Context) {
 			return
 		case <-w.reconnectCh:
 			w.logger.Info("Connection monitor handling reconnection request")
-			w.handleReconnection(ctx)
+			// Sử dụng scheduler context cho reconnection
+			w.mu.RLock()
+			schedulerCtx := w.schedulerCtx
+			w.mu.RUnlock()
+			if schedulerCtx != nil {
+				w.handleReconnection(schedulerCtx)
+			}
 		case <-retryTicker.C:
 			// Check if we need to retry connection
 			w.mu.RLock()
 			running := w.isRunning
 			conn := w.conn
+			schedulerCtx := w.schedulerCtx
 			w.mu.RUnlock()
 
-			if running && conn == nil {
+			if running && conn == nil && schedulerCtx != nil {
 				w.logger.Info("No active connection, attempting reconnection")
-				w.handleReconnection(ctx)
+				w.handleReconnection(schedulerCtx)
 			}
 		case <-ticker.C:
 			// Check connection health
