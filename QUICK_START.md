@@ -36,9 +36,11 @@ cp env.example .env
 # 2. Enable NATS in .env
 echo "NATS_ENABLED=true" >> .env
 
-# 3. Start NATS + Crawler
+# 3. Start NATS + Crawler (builds with latest code)
 make -f Makefile.nats full-stack-up
 ```
+
+**✅ Always builds with latest code!** The `full-stack-up` command includes `--build` flag to ensure your code changes are included.
 
 ## 2️⃣ NATS JetStream Integration 🆕
 

@@ -98,6 +98,19 @@ consumer-create: ## Create a test consumer
 		--pull \
 		--defaults
 
+.PHONY: consumer-create-workqueue
+consumer-create-workqueue: ## Create a consumer suitable for WorkQueue streams
+	@echo "Creating WorkQueue consumer: $(CONSUMER_NAME)"
+	docker exec ethereum-nats-box nats consumer add $(STREAM_NAME) $(CONSUMER_NAME) \
+		--deliver=all \
+		--filter "$(SUBJECT_PREFIX).events" \
+		--ack explicit \
+		--max-deliver 3 \
+		--wait 30s \
+		--replay instant \
+		--pull \
+		--defaults
+
 .PHONY: consumer-info
 consumer-info: ## Show consumer information
 	@echo "Consumer information for $(CONSUMER_NAME):"
@@ -169,7 +182,7 @@ reset-all: ## Reset everything (DANGER!)
 .PHONY: crawler-start
 crawler-start: ## Start crawler with NATS enabled
 	@echo "Starting Ethereum crawler with NATS enabled..."
-	NATS_ENABLED=true docker-compose -f docker-compose.scheduler.yml up -d
+	NATS_ENABLED=true NATS_URL=nats://ethereum-nats:4222 docker-compose -f docker-compose.scheduler.yml up -d --build
 
 .PHONY: crawler-logs
 crawler-logs: ## Show crawler logs
@@ -211,3 +224,8 @@ clean: ## Clean up Docker resources
 	@echo "Cleaning up Docker resources..."
 	docker system prune -f
 	docker volume prune -f
+
+.PHONY: stream-list
+stream-list: ## List all streams
+	@echo "Listing all streams..."
+	docker exec ethereum-nats-box nats stream ls

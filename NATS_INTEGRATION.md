@@ -332,6 +332,50 @@ nats stream restore TRANSACTIONS ./backup/
    nats consumer rm TRANSACTIONS <consumer-name>
    ```
 
+4. **NATS NUI Browser Error (HTTP 500)**
+   ```
+   Error: multiple non-filtered consumers not allowed on workqueue stream
+   ```
+   **Solution**: WorkQueue streams chỉ cho phép 1 consumer. Xóa existing consumers:
+   ```bash
+   # List consumers
+   make -f Makefile.nats monitor
+
+   # Delete conflicting consumer
+   make -f Makefile.nats consumer-delete CONSUMER_NAME=example-consumer
+
+   # Verify no consumers remain
+   docker exec ethereum-nats-box nats consumer ls TRANSACTIONS
+   ```
+
+   **Alternative**: Tạo consumer có filter:
+   ```bash
+   nats consumer add TRANSACTIONS filtered-consumer \
+     --filter "transactions.events" \
+     --ack explicit --pull --defaults
+   ```
+
+5. **NATS NUI WorkQueue Consumer Error**
+   ```
+   Error: consumer must be deliver all on workqueue stream
+   ```
+   **Solution**: WorkQueue streams yêu cầu consumer có `deliver=all` policy:
+   ```bash
+   # Tạo consumer phù hợp cho WorkQueue streams
+   make -f Makefile.nats consumer-create-workqueue CONSUMER_NAME=nui-consumer
+
+   # Hoặc tạo thủ công
+   docker exec ethereum-nats-box nats consumer add TRANSACTIONS nui-consumer \
+     --deliver=all \
+     --filter "transactions.events" \
+     --ack explicit \
+     --max-deliver 3 \
+     --wait 30s \
+     --replay instant \
+     --pull \
+     --defaults
+   ```
+
 4. **Message Publishing Failed**
    - Check crawler logs for NATS connection status
    - Verify NATS_ENABLED=true
