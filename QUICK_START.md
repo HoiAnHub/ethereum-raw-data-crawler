@@ -14,6 +14,12 @@ This guide covers:
 - Go 1.23+ (for development)
 - Make utility
 
+## 🔧 Setup Network
+
+```bash
+docker network create ethereum-raw-data-crawler_ethereum-network
+```
+
 ## 1️⃣ Basic Setup
 
 ### Option A: Standard Setup (MongoDB Only)

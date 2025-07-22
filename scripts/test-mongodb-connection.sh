@@ -56,22 +56,36 @@ if command -v mongosh >/dev/null 2>&1; then
 else
     echo -e "${YELLOW}⚠ mongosh not found, testing with curl...${NC}"
 
-    # Extract host and port from URI for basic connectivity test
-    if [[ "$MONGO_URI" =~ mongodb://([^:/]+):?([0-9]*) ]]; then
+        # Extract host and port from URI for basic connectivity test
+    if [[ "$MONGO_URI" =~ mongodb://([^@]+)@([^:/]+):?([0-9]*)/ ]]; then
+        # Format: mongodb://username:password@host:port/database
+        HOST="${BASH_REMATCH[2]}"
+        PORT="${BASH_REMATCH[3]:-27017}"
+    elif [[ "$MONGO_URI" =~ mongodb://([^:/]+):?([0-9]*)/ ]]; then
+        # Format: mongodb://host:port/database (no auth)
         HOST="${BASH_REMATCH[1]}"
         PORT="${BASH_REMATCH[2]:-27017}"
-
-        echo -e "${BLUE}Testing connectivity to ${HOST}:${PORT}...${NC}"
-
-        if timeout 5 bash -c "</dev/tcp/$HOST/$PORT" 2>/dev/null; then
-            echo -e "${GREEN}✅ Network connectivity successful${NC}"
-        else
-            echo -e "${RED}❌ Network connectivity failed${NC}"
-            exit 1
-        fi
+    elif [[ "$MONGO_URI" =~ mongodb\+srv://([^@]+)@([^/]+)/ ]]; then
+        # Format: mongodb+srv://username:password@cluster.mongodb.net/database
+        HOST="${BASH_REMATCH[2]}"
+        PORT="27017"
     else
         echo -e "${YELLOW}⚠ Could not parse MongoDB URI for connectivity test${NC}"
         echo -e "${YELLOW}⚠ Please install mongosh for full connection testing${NC}"
+        exit 1
+    fi
+
+    echo -e "${BLUE}Testing connectivity to ${HOST}:${PORT}...${NC}"
+
+    if timeout 5 bash -c "</dev/tcp/$HOST/$PORT" 2>/dev/null; then
+        echo -e "${GREEN}✅ Network connectivity successful${NC}"
+    else
+        echo -e "${RED}❌ Network connectivity failed${NC}"
+        echo -e "${YELLOW}⚠ This might be due to:${NC}"
+        echo -e "${YELLOW}   - Firewall blocking port ${PORT}${NC}"
+        echo -e "${YELLOW}   - MongoDB server not running${NC}"
+        echo -e "${YELLOW}   - Network connectivity issues${NC}"
+        exit 1
     fi
 fi
 

@@ -54,6 +54,7 @@ help:
 	@echo "  env-check-full       Full environment check with tests"
 	@echo "  test-mongodb         Test MongoDB connection"
 	@echo "  setup-mongodb        Setup MongoDB indexes"
+	@echo "  install-mongosh      Install MongoDB Shell"
 	@echo ""
 	@echo "$(YELLOW)🔥 Recommended deployment scripts:$(NC)"
 	@echo "  ./scripts/deploy.sh fresh            # Force fresh build (latest code)"
@@ -234,6 +235,16 @@ setup-mongodb:
 		./scripts/setup-mongodb-indexes.sh; \
 	else \
 		echo "$(YELLOW)scripts/setup-mongodb-indexes.sh not found$(NC)"; \
+	fi
+
+## Install MongoDB Shell
+install-mongosh:
+	@echo "$(BLUE)Installing MongoDB Shell...$(NC)"
+	@if [ -f scripts/install-mongosh.sh ]; then \
+		chmod +x scripts/install-mongosh.sh; \
+		./scripts/install-mongosh.sh; \
+	else \
+		echo "$(YELLOW)scripts/install-mongosh.sh not found$(NC)"; \
 	fi
 
 ## Deploy to production (force fresh build)
