@@ -52,6 +52,8 @@ help:
 	@echo "  env-check            Check .env file exists"
 	@echo "  env-check-container  Check container environment variables"
 	@echo "  env-check-full       Full environment check with tests"
+	@echo "  test-mongodb         Test MongoDB connection"
+	@echo "  setup-mongodb        Setup MongoDB indexes"
 	@echo ""
 	@echo "$(YELLOW)🔥 Recommended deployment scripts:$(NC)"
 	@echo "  ./scripts/deploy.sh fresh            # Force fresh build (latest code)"
@@ -212,6 +214,26 @@ env-check-full:
 		./scripts/check-env-vars.sh; \
 	else \
 		echo "$(YELLOW)scripts/check-env-vars.sh not found$(NC)"; \
+	fi
+
+## Test MongoDB connection
+test-mongodb:
+	@echo "$(BLUE)Testing MongoDB connection...$(NC)"
+	@if [ -f scripts/test-mongodb-connection.sh ]; then \
+		chmod +x scripts/test-mongodb-connection.sh; \
+		./scripts/test-mongodb-connection.sh; \
+	else \
+		echo "$(YELLOW)scripts/test-mongodb-connection.sh not found$(NC)"; \
+	fi
+
+## Setup MongoDB indexes
+setup-mongodb:
+	@echo "$(BLUE)Setting up MongoDB indexes...$(NC)"
+	@if [ -f scripts/setup-mongodb-indexes.sh ]; then \
+		chmod +x scripts/setup-mongodb-indexes.sh; \
+		./scripts/setup-mongodb-indexes.sh; \
+	else \
+		echo "$(YELLOW)scripts/setup-mongodb-indexes.sh not found$(NC)"; \
 	fi
 
 ## Deploy to production (force fresh build)

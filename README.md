@@ -19,8 +19,10 @@ A robust Ethereum block scheduler service that efficiently monitors and processe
 
 - Go 1.21 or higher
 - Docker and Docker Compose
-- MongoDB
+- External MongoDB instance (MongoDB Atlas, self-hosted, etc.)
 - Ethereum RPC endpoint (Infura/Alchemy recommended)
+
+> 📖 **For detailed setup with external MongoDB, see [QUICK_START_EXTERNAL_MONGODB.md](QUICK_START_EXTERNAL_MONGODB.md)**
 
 ### Setup
 
@@ -34,7 +36,7 @@ A robust Ethereum block scheduler service that efficiently monitors and processe
 2. **Configure environment:**
    ```bash
    cp env.example .env
-   # Edit .env with your Ethereum RPC URLs and MongoDB settings
+   # Edit .env with your Ethereum RPC URLs and external MongoDB connection string
    ```
 
 3. **Start the scheduler:**
