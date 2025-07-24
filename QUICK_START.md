@@ -34,7 +34,7 @@ nano .env
 make scheduler-up-fresh
 ```
 
-### Option B: Full Stack with NATS JetStream
+### Option B: Full Stack with NATS JetStream (Recommended)
 ```bash
 # 1. Copy environment file
 cp env.example .env
@@ -42,7 +42,7 @@ cp env.example .env
 # 2. Enable NATS in .env
 echo "NATS_ENABLED=true" >> .env
 
-# 3. Start NATS + Crawler (builds with latest code)
+# 3. Start NATS + Crawler (builds with latest code) - (RUN WHEN NEW SETUP)
 make -f Makefile.nats full-stack-up
 ```
 
